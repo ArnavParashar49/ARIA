@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from actions.editor_open import _activate_app, copy_text_to_clipboard
+from core.platform_utils import mod_key
 
 
 def _load_os() -> str:
@@ -151,21 +152,21 @@ def _ui_paste_and_submit(prompt: str, editor: str) -> bool:
     pyautogui.PAUSE = 0.06
 
     if editor == "cursor":
-        pyautogui.hotkey("command", "i")
+        pyautogui.hotkey(mod_key(),"i")
         time.sleep(1.0)
     else:
         # Copilot Chat — try default shortcut, then command palette
-        pyautogui.hotkey("command", "shift", "i")
+        pyautogui.hotkey(mod_key(),"shift", "i")
         time.sleep(0.8)
         # If chat did not open, palette fallback
-        pyautogui.hotkey("command", "shift", "p")
+        pyautogui.hotkey(mod_key(),"shift", "p")
         time.sleep(0.5)
         pyautogui.write("Copilot: Open Chat", interval=0.02)
         time.sleep(0.4)
         pyautogui.press("enter")
         time.sleep(0.9)
 
-    pyautogui.hotkey("command", "v")
+    pyautogui.hotkey(mod_key(),"v")
     time.sleep(0.35)
     pyautogui.press("enter")
     print(f"[EditorAILaunch] Submitted prompt via {editor} UI")

@@ -16,6 +16,7 @@ from actions.file_controller._paths import (
     _resolve_target, _resolve_file_ref, _find_in_dir, _resolve_file_ref_or_find,
     _unique_dest, _format_size, _safe_trash,
 )
+from core.platform_utils import open_path
 
 
 def list_files(path: str = "desktop", show_hidden: bool = False) -> str:
@@ -767,14 +768,8 @@ def open_file(
         if not _is_safe_path(target):
             return f"Access denied: {target}"
 
-        cmd = ["open", str(target)]
-        if app:
-            cmd = ["open", "-a", app, str(target)]
-
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if r.returncode != 0:
-            err = (r.stderr or r.stdout or "").strip()
-            return f"FAILED: Could not open {target.name} — {err}"
+        if not open_path(target, app=app or None):
+            return f"FAILED: Could not open {target.name}."
 
         via = "Spotlight" if name and not path else "path"
         app_note = f" in {app}" if app else ""
@@ -810,11 +805,8 @@ def open_recent_screenshot(search_path: str = "desktop") -> str:
             return open_file(name="Screenshot", search_path=search_path)
 
         latest = max(candidates, key=lambda p: p.stat().st_mtime)
-        cmd = ["open", str(latest)]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if r.returncode != 0:
-            err = (r.stderr or r.stdout or "").strip()
-            return f"FAILED: Could not open {latest.name} — {err}"
+        if not open_path(latest):
+            return f"FAILED: Could not open {latest.name}."
         return f"Opened most recent screenshot: {latest.name}"
 
     except Exception as e:
