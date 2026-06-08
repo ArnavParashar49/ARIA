@@ -4,6 +4,8 @@ import time
 import traceback
 from urllib.parse import quote
 
+from core.platform_utils import mod_key
+
 from actions.browser_native import (
     activate_app,
     get_front_browser_url,
@@ -294,7 +296,7 @@ def _compose_and_send(
 
         activate_app(app)
         time.sleep(0.4)
-        pyautogui.hotkey("command", "enter")
+        pyautogui.hotkey(mod_key(), "enter")
         time.sleep(1.0)
         _pending_draft = None
         _log(player, f"sent (cmd+enter; js={detail}) → {to}")
@@ -369,7 +371,7 @@ def _press_send_safe(browser: str | None) -> str:
         try:
             import pyautogui
 
-            pyautogui.hotkey("command", "enter")
+            pyautogui.hotkey(mod_key(), "enter")
             return f"hotkey_cmd_enter (js was {result})"
         except Exception as e:
             return f"js={result}; hotkey failed: {e}"
@@ -377,7 +379,7 @@ def _press_send_safe(browser: str | None) -> str:
     try:
         import pyautogui
 
-        pyautogui.hotkey("command", "enter")
+        pyautogui.hotkey(mod_key(), "enter")
         return "hotkey_cmd_enter"
     except Exception as e:
         return f"send_failed: {e}"

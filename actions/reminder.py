@@ -541,6 +541,9 @@ return matched
 
 
 def _open_app(app_name: str) -> str:
+    from core.platform_utils import IS_MAC
+    if not IS_MAC:
+        return f"Opening the {app_name} app is only available on macOS."
     try:
         r = subprocess.run(["open", "-a", app_name], capture_output=True, text=True, timeout=8)
         if r.returncode == 0:
