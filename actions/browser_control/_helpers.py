@@ -57,35 +57,35 @@ def _normalize_url(url: str) -> str:
 
     if "://" in url:
         return url
-    # No dot at all → assume .com  (e.g. "instagram" → "instagram.com")
+    # Bare word without a TLD — caller should resolve via dynamic search
+    # (app_resolver / download_control handle the actual URL lookup)
     if "." not in url:
-        url = url + ".com"
+        url = url + ".com"  # minimal guess; prefer dynamic resolution
     return "https://" + url
-
 
 # Simple navigation in the user's real browser (avoids Playwright about:blank tabs).
 _USE_NATIVE_NAV = True
 
-# Direct official download pages (skip bad Google results).
-_OFFICIAL_APP_URLS: dict[str, str] = {
-    "spotify": "https://www.spotify.com/download/",
-    "google chrome": "https://www.google.com/chrome/",
-    "chrome": "https://www.google.com/chrome/",
-    "firefox": "https://www.mozilla.org/firefox/download/",
-    "vlc": "https://www.videolan.org/vlc/",
-    "discord": "https://discord.com/download",
-    "zoom": "https://zoom.us/download",
-    "slack": "https://slack.com/downloads/mac",
-    "vscode": "https://code.visualstudio.com/download",
-    "visual studio code": "https://code.visualstudio.com/download",
-    "telegram": "https://desktop.telegram.org/",
-    "whatsapp": "https://www.whatsapp.com/download",
-    "obs": "https://obsproject.com/download",
-    "steam": "https://store.steampowered.com/about/",
-    "epic games": "https://store.epicgames.com/download",
-    "notion": "https://www.notion.com/desktop",
-    "cursor": "https://cursor.com/download",
-}
+# Dynamic app-download lookup: no longer a hardcoded truth table.
+# Download URLs are now resolved at call time via web search (DDG + Gemini)
+# in download_control. This dict is kept only as an optional cache hint.
+def _app_download_hint(app_name: str) -> str | None:
+    """Optional fast-path hint for well-known apps. Not authoritative."""
+    _hints = {
+        "spotify": "https://www.spotify.com/download/",
+        "chrome": "https://www.google.com/chrome/",
+        "firefox": "https://www.mozilla.org/firefox/download/",
+        "vlc": "https://www.videolan.org/vlc/",
+        "discord": "https://discord.com/download",
+        "zoom": "https://zoom.us/download",
+        "vscode": "https://code.visualstudio.com/download",
+        "telegram": "https://desktop.telegram.org/",
+        "whatsapp": "https://www.whatsapp.com/download",
+        "obs": "https://obsproject.com/download",
+        "steam": "https://store.steampowered.com/about/",
+        "notion": "https://www.notion.com/desktop",
+    }
+    return _hints.get(app_name.lower().strip())
 
 _BAD_RESULT_DOMAINS = (
     "google.com", "gstatic.com", "webcache", "accounts.google",

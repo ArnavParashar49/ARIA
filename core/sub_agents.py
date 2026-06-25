@@ -1,36 +1,35 @@
-"""Multi-agent orchestration for ARIA.
+"""Thin compatibility shim — re-exports agent specs from core.agent_swarm.
 
-Allows the manager agent to decompose complex goals and dispatch work to
-specialised sub-agents that each run in their own isolated ReAct loop with
-a scoped tool set and focused system prompt.
+This file exists so that modules (goal_dispatcher, bootstrap) that need
+simple sub-agent specs + isolated execution don't need to know about the
+full conversation protocol. The canonical agent definitions live in
+core.agent_swarm.SWARM_AGENTS.
 """
 
 from __future__ import annotations
 
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Callable
 
 from core.agent_loop import (
-    DEFAULT_AGENT_MODEL,
     DEFAULT_MAX_STEPS,
     AgentResult,
     GeminiToolSession,
     Step,
     run_agent,
 )
+from core.agent_swarm import SWARM_AGENTS
 from hybrid.registry import ToolRegistry
 from hybrid.types import ExecutionContext
 
 
 # --------------------------------------------------------------------------- #
-# Sub-agent specification                                                      #
+# Re-export agent specs as BUILT_IN_AGENTS (canonical source = SWARM_AGENTS)   #
 # --------------------------------------------------------------------------- #
 
 @dataclass
 class SubAgentSpec:
-    """Blueprint for a specialised sub-agent."""
+    """Simple spec for isolated sub-agent execution (no conversation)."""
 
     name: str
     system_prompt: str
@@ -38,90 +37,23 @@ class SubAgentSpec:
     max_steps: int = DEFAULT_MAX_STEPS
 
 
-# --------------------------------------------------------------------------- #
-# Built-in agent definitions                                                   #
-# --------------------------------------------------------------------------- #
+def _swarm_to_sub(spec) -> SubAgentSpec:
+    return SubAgentSpec(
+        name=spec.name,
+        system_prompt=spec.system_prompt,
+        allowed_tools=spec.allowed_tools,
+        max_steps=spec.max_steps,
+    )
+
 
 BUILT_IN_AGENTS: dict[str, SubAgentSpec] = {
-    "researcher": SubAgentSpec(
-        name="researcher",
-        system_prompt=(
-            "You are ARIA's Research Agent. Your job is to gather, compare, and "
-            "summarise information from the web and other sources.\n\n"
-            "Principles:\n"
-            "- Search broadly first, then drill into specifics.\n"
-            "- Always cite sources (URLs) in your summary.\n"
-            "- Return a clear, concise answer — not raw search dumps.\n"
-            "- If you cannot find reliable information, say so honestly.\n"
-            "- Do NOT write code or modify files — only gather information."
-        ),
-        allowed_tools=[
-            "web_search", "browser_control", "youtube_video", "flight_finder",
-        ],
-        max_steps=15,
-    ),
-    "coder": SubAgentSpec(
-        name="coder",
-        system_prompt=(
-            "You are ARIA's Coding Agent — a senior engineer who writes real, "
-            "production-quality code.\n\n"
-            "Principles:\n"
-            "- Write COMPLETE code. Never leave TODOs, stubs, or placeholders.\n"
-            "- Handle errors and edge cases properly.\n"
-            "- Use file_controller to create/edit files.\n"
-            "- Use code_helper or dev_agent for building and running.\n"
-            "- After writing code, verify it works by running it.\n"
-            "- Stay inside the project folder. Never touch unrelated files.\n"
-            "- If you need a capability you don't have, use create_action to "
-            "build it."
-        ),
-        allowed_tools=[
-            "file_controller", "code_helper", "dev_agent",
-            "create_action", "web_search",
-        ],
-        max_steps=20,
-    ),
-    "system_ops": SubAgentSpec(
-        name="system_ops",
-        system_prompt=(
-            "You are ARIA's System Operations Agent. You handle OS-level tasks: "
-            "opening apps, managing files/folders, adjusting settings, and "
-            "automating the desktop.\n\n"
-            "Principles:\n"
-            "- Execute tasks precisely — don't over-do or under-do.\n"
-            "- Use the right tool for each operation.\n"
-            "- Report what you did clearly so the user knows the outcome.\n"
-            "- If a destructive operation needs confirmation, stop and report."
-        ),
-        allowed_tools=[
-            "open_app", "file_controller", "desktop_control",
-            "system_control", "computer_settings", "computer_control",
-            "organizer_control", "document_tools",
-        ],
-        max_steps=12,
-    ),
-    "comms": SubAgentSpec(
-        name="comms",
-        system_prompt=(
-            "You are ARIA's Communications Agent. You handle emails, messages, "
-            "calendar events, reminders, and contact management.\n\n"
-            "Principles:\n"
-            "- Always look up contacts before sending messages or emails.\n"
-            "- Draft messages clearly and confirm before sending.\n"
-            "- For calendar events, include all relevant details.\n"
-            "- Report what you did so the user can verify."
-        ),
-        allowed_tools=[
-            "send_email", "send_message", "contact_manager",
-            "calendar_control", "reminder", "notes_control",
-        ],
-        max_steps=10,
-    ),
+    name: _swarm_to_sub(spec)
+    for name, spec in SWARM_AGENTS.items()
 }
 
 
 # --------------------------------------------------------------------------- #
-# Sub-agent execution                                                          #
+# Scoped registry + isolated execution                                         #
 # --------------------------------------------------------------------------- #
 
 def _build_scoped_registry(spec: SubAgentSpec) -> ToolRegistry:
@@ -169,7 +101,7 @@ def run_sub_agent(
 
 
 # --------------------------------------------------------------------------- #
-# Multi-agent orchestration (parallel dispatch)                                #
+# Parallel dispatch (no conversation, no dependency ordering)                   #
 # --------------------------------------------------------------------------- #
 
 @dataclass
@@ -192,61 +124,40 @@ def run_multi_agent(
     *,
     on_progress: Callable[[str, str], None] | None = None,
 ) -> MultiAgentResult:
-    """Run multiple sub-agents in parallel and merge their results.
+    """Run multiple sub-agents in parallel and merge results."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    Args:
-        sub_tasks: List of (agent_type, goal) pairs to dispatch.
-        ctx: Shared execution context.
-        on_progress: Callback(agent_name, status_message) for progress updates.
-
-    Returns:
-        MultiAgentResult with individual results and a merged summary.
-    """
     ctx = ctx or ExecutionContext()
-    multi_result = MultiAgentResult()
+    result = MultiAgentResult()
 
-    def _run_one(task: SubAgentTask) -> tuple[str, AgentResult]:
-        spec = BUILT_IN_AGENTS.get(task.agent_type)
-        if spec is None:
-            return task.agent_type, AgentResult(
-                answer=f"Unknown agent type: {task.agent_type}",
-                stopped_reason="error",
-            )
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(sub_tasks)))) as pool:
+        futures = {}
+        for task in sub_tasks:
+            spec = BUILT_IN_AGENTS.get(task.agent_type)
+            if spec is None:
+                result.results[task.agent_type] = AgentResult(
+                    answer=f"Unknown agent: {task.agent_type}",
+                    stopped_reason="error",
+                )
+                continue
+            fut = pool.submit(run_sub_agent, spec, task.goal, ctx)
+            futures[fut] = task
 
-        if on_progress:
-            on_progress(spec.name, f"Starting: {task.goal[:60]}")
-
-        def _on_step(step: Step) -> None:
-            if on_progress:
-                on_progress(spec.name, f"{step.tool}() → {'✓' if step.ok else '✗'}")
-
-        result = run_sub_agent(spec, task.goal, ctx, on_step=_on_step)
-
-        if on_progress:
-            on_progress(spec.name, f"Done ({result.stopped_reason})")
-
-        return spec.name, result
-
-    # Run sub-agents in parallel threads
-    max_workers = min(4, max(1, len(sub_tasks)))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_run_one, t): t for t in sub_tasks}
         for fut in as_completed(futures):
+            task = futures[fut]
             try:
-                name, result = fut.result()
-                multi_result.results[name] = result
-            except Exception as e:
-                task = futures[fut]
-                multi_result.results[task.agent_type] = AgentResult(
-                    answer=f"Sub-agent '{task.agent_type}' crashed: {e}",
+                result.results[task.agent_type] = fut.result()
+                if on_progress:
+                    on_progress(task.agent_type, "Done")
+            except Exception as exc:
+                result.results[task.agent_type] = AgentResult(
+                    answer=f"Agent crashed: {exc}",
                     stopped_reason="error",
                 )
 
-    # Build summary
     parts = []
-    for name, result in multi_result.results.items():
-        status = "✅" if result.stopped_reason == "done" else "⚠️"
-        parts.append(f"{status} **{name}** ({len(result.steps)} steps): {result.answer[:200]}")
-    multi_result.summary = "\n".join(parts)
-
-    return multi_result
+    for name, r in result.results.items():
+        status = "✅" if r.stopped_reason == "done" else "⚠️"
+        parts.append(f"{status} **{name}**: {r.answer[:200]}")
+    result.summary = "\n".join(parts)
+    return result

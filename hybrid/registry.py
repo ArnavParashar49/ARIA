@@ -21,6 +21,8 @@ class RegisteredTool:
     internal: bool = False  # save_memory, shutdown — not for fast-path routing
     guard: ToolGuard | None = None
     tags: list[str] = field(default_factory=list)
+    # Declarative fast-path regex patterns: list of (regex_str, arg_map_dict)
+    fast_path_patterns: list[tuple[str, dict]] = field(default_factory=list)
 
 
 class ToolRegistry:
@@ -49,10 +51,11 @@ class ToolRegistry:
         internal: bool = False,
         guard: ToolGuard | None = None,
         tags: list[str] | None = None,
-    ) -> None:
+        fast_path_patterns: list[tuple[str, dict]] | None = None,
+    ) -> RegisteredTool:
         if name in self._tools:
             print(f"[ToolRegistry] Replacing tool: {name}")
-        self._tools[name] = RegisteredTool(
+        tool = RegisteredTool(
             name=name,
             description=description,
             parameters=parameters,
@@ -64,7 +67,10 @@ class ToolRegistry:
             internal=internal,
             guard=guard,
             tags=tags or [],
+            fast_path_patterns=fast_path_patterns or [],
         )
+        self._tools[name] = tool
+        return tool
 
     def lookup(self, name: str) -> RegisteredTool | None:
         return self._tools.get(name)
@@ -117,7 +123,7 @@ class ToolRegistry:
         """Compact tool list for planner prompts."""
         lines = []
         for t in self._tools.values():
-            if t.internal and t.name == "shutdown_aria":
+            if t.internal and t.name == "shutdown_neo":
                 continue
             lines.append(f"- {t.name}: {t.description[:120]}")
         return "\n".join(lines[:80])

@@ -50,7 +50,7 @@ _TOOL_META: dict[str, dict[str, Any]] = {
     "save_memory": {"agent": "memory", "category": "memory", "internal": True, "fast": False},
     "agent_task": {"agent": "tool", "category": "agent", "fast": False},
     "spawn_agent": {"agent": "tool", "category": "agent", "fast": False},
-    "shutdown_aria": {"agent": "system", "category": "system", "internal": True, "fast": False},
+    "shutdown_neo": {"agent": "system", "category": "system", "internal": True, "fast": False},
     "memory_tool": {"agent": "memory", "category": "memory", "fast": True},
     "apply_skill": {"agent": "memory", "category": "memory", "fast": False},
     "screen_analyze": {"agent": "research", "category": "vision", "fast": False},
@@ -145,7 +145,7 @@ def _build_handlers() -> dict[str, Callable]:
         "discuss_project": _wrap_action(discuss_project, speak=True, use_response=True),
         "search_docs": _wrap_action(search_docs, speak=True, use_response=True),
         "exa_search": _wrap_action(exa_search),
-        "shutdown_aria": lambda _a, _c: "Goodbye.",
+        "shutdown_neo": lambda _a, _c: "Goodbye.",
     }
 
 

@@ -1,6 +1,6 @@
 # Autonomous mode
 
-ARIA can run multi-step goals as an **autonomous tool-use loop** instead of a
+NEO can run multi-step goals as an **autonomous tool-use loop** instead of a
 pre-planned, fixed list of steps. The model decides one action at a time, sees the
 **real** result, and decides the next action — until the goal is met.
 

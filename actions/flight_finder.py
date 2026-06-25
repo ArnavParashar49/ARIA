@@ -31,10 +31,64 @@ _MONTH_MAP: dict[str, int] = {
     "eylül": 9, "ekim": 10,  "kasım": 11, "aralık": 12,
 }
 
-_RELATIVE_MAP_KEYS = {
-    "today", "bugün",
-    "tomorrow", "yarın",
-}
+_CITY_CODES: dict[str, str] = {}  # dynamic — populated by _geocode_city()
+
+
+def _geocode_city(city_name: str) -> str:
+    """Resolve city name to IATA airport code via Gemini + basic mapping.
+    Falls back to uppercase first 3 letters of the city name."""
+    name = (city_name or "").strip()
+    if not name:
+        return ""
+    if len(name) == 3 and name.isalpha():
+        return name.upper()
+    # Quick local lookup first (common cities)
+    _known = {
+        "delhi": "DEL", "new delhi": "DEL", "mumbai": "BOM", "bangalore": "BLR",
+        "bengaluru": "BLR", "chennai": "MAA", "kolkata": "CCU", "hyderabad": "HYD",
+        "dubai": "DXB", "abu dhabi": "AUH", "london": "LHR", "new york": "JFK",
+        "nyc": "JFK", "los angeles": "LAX", "la": "LAX", "san francisco": "SFO",
+        "singapore": "SIN", "bangkok": "BKK", "tokyo": "NRT", "paris": "CDG",
+        "sydney": "SYD", "toronto": "YYZ", "istanbul": "IST", "doha": "DOH",
+    }
+    code = _known.get(name.lower())
+    if code:
+        return code
+    # Try Gemini geocoding for unknown cities
+    try:
+        from core.llm import ask
+        from core.models import PRIMARY
+        code = ask(
+            f"What is the primary IATA airport code for {name}? "
+            "Return ONLY the 3-letter code, nothing else.",
+            model=PRIMARY,
+        ).strip().upper()[:3]
+        if len(code) == 3 and code.isalpha():
+            return code
+    except Exception:
+        pass
+    return name.upper()[:3]
+
+
+def city_to_code(city: str) -> str:
+    """Resolve a city name to IATA code dynamically."""
+    return _geocode_city(city)
+
+
+def infer_date_from_text(text: str) -> str | None:
+    if not text:
+        return None
+    lower = text.lower()
+    today = datetime.now()
+    if "next week" in lower:
+        return (today + timedelta(days=7)).strftime("%Y-%m-%d")
+    if "this week" in lower:
+        return (today + timedelta(days=3)).strftime("%Y-%m-%d")
+    if "tomorrow" in lower or "yarın" in lower:
+        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    if "today" in lower or "bugün" in lower:
+        return today.strftime("%Y-%m-%d")
+    return None
 
 
 def _parse_date(raw: str) -> str:
@@ -55,6 +109,8 @@ def _parse_date(raw: str) -> str:
         "today": today, "bugün": today,
         "tomorrow": today + timedelta(days=1),
         "yarın":    today + timedelta(days=1),
+        "next week": today + timedelta(days=7),
+        "this week": today + timedelta(days=3),
     }
     for key, val in relative.items():
         if key in lower:
@@ -62,11 +118,13 @@ def _parse_date(raw: str) -> str:
 
     try:
         from core.llm import ask
+        from core.models import PRIMARY, RESEARCH
+
         result = ask(
             f"Today is {today.strftime('%Y-%m-%d')}. "
             f"Convert this date expression to YYYY-MM-DD: '{raw}'. "
             f"Return ONLY the date string, nothing else.",
-            model="gemini-2.5-flash-lite",
+            model=PRIMARY,
         )
         if re.match(r"\d{4}-\d{2}-\d{2}", result):
             return result
@@ -81,9 +139,9 @@ def _parse_date(raw: str) -> str:
                 year = today.year if month_num >= today.month else today.year + 1
                 return f"{year}-{month_num:02d}-{day:02d}"
 
-    # Last resort: today
-    print(f"[FlightFinder] ⚠️ Could not parse date '{raw}' — using today.")
-    return today.strftime("%Y-%m-%d")
+    # Default: one week out when user gave a vague timeframe
+    print(f"[FlightFinder] ⚠️ Could not parse date '{raw}' — using next week.")
+    return (today + timedelta(days=7)).strftime("%Y-%m-%d")
 
 _CABIN_CODE: dict[str, str] = {
     "economy":  "1",
@@ -112,8 +170,7 @@ def _build_google_flights_url(
 
     return (
         f"{base}"
-        f"?q={trip}"
-        f"&tfs=CBwQAhoeEgoyMDI1LTAzLTE1agcIARIDSVNUcgcIARIDTEhS"   
+        f"?q={trip.replace(' ', '+')}"
         f"&curr=USD"
         f"&cabin={cabin_code}"
         f"&adults={passengers}"
@@ -161,9 +218,11 @@ def _parse_flights_with_gemini(
     )
 
     try:
+        from core.models import RESEARCH
+
         flights = ask_json(
             prompt,
-            model="gemini-2.5-flash",
+            model=RESEARCH,
             system=(
                 "You are a flight data extraction expert. "
                 "Extract flight information from raw webpage text. "
@@ -231,7 +290,7 @@ def _format_text_report(
     page_url:    str,
 ) -> str:
     lines = [
-        "ARIA — Flight Search Results",
+        "NEO — Flight Search Results",
         "─" * 50,
         f"Route     : {origin} → {destination}",
         f"Date      : {date}",
@@ -300,8 +359,10 @@ def flight_finder(parameters: dict, player=None, speak=None) -> str:
 
     if not origin or not destination:
         return "Please provide both origin and destination, sir."
+
     if not date_raw:
-        return "Please provide a departure date, sir."
+        combined = f"{origin} {destination} {params.get('query', '')}"
+        date_raw = infer_date_from_text(combined) or "next week"
 
     # Normalise cabin value
     if cabin not in _CABIN_CODE:
@@ -336,10 +397,39 @@ def flight_finder(parameters: dict, player=None, speak=None) -> str:
         flights = _parse_flights_with_gemini(raw_text, origin, destination, date)
         spoken  = _format_spoken(flights, origin, destination, date)
 
+        cheapest_airline = cheapest_price = ""
+        priced = [f for f in flights if f.get("price")]
+        if priced:
+            cheapest = min(
+                priced,
+                key=lambda x: int(re.sub(r"[^\d]", "", str(x["price"])) or "999999"),
+            )
+            cheapest_airline = str(cheapest.get("airline", ""))
+            cheapest_price = f"{cheapest.get('price', '')} {cheapest.get('currency', '')}".strip()
+
+        try:
+            from core.action_context import set_flight
+
+            set_flight(
+                origin=origin,
+                destination=destination,
+                date=date,
+                page_url=page_url,
+                cheapest_airline=cheapest_airline,
+                cheapest_price=cheapest_price,
+                passengers=passengers,
+            )
+        except Exception as e:
+            print(f"[FlightFinder] ⚠️ action_context: {e}")
+
         if speak:
             speak(spoken)
 
         result = spoken
+        result += (
+            f" Search page: {page_url}."
+            f" Say 'open the link' or 'goibibo link' to open the booking page."
+        )
 
         if save and flights:
             report     = _format_text_report(flights, origin, destination, date, return_date, page_url)

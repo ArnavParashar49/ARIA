@@ -1,6 +1,6 @@
 """Browser automation tool (Playwright). Split into _helpers (URL / profile /
 browser detection), _session (the stateful browser session + registry), and
-this dispatcher. Re-exports browser_control, _registry, and _OFFICIAL_APP_URLS
+this dispatcher. Re-exports browser_control, _registry, and _app_download_hint
 for sibling modules (browser_native, download_control) that import them."""
 
 from __future__ import annotations
@@ -8,7 +8,7 @@ from __future__ import annotations
 import concurrent.futures
 
 from actions.browser_control._helpers import (
-    _OS, _USE_NATIVE_NAV, _OFFICIAL_APP_URLS, _BAD_RESULT_DOMAINS,
+    _OS, _USE_NATIVE_NAV, _app_download_hint, _BAD_RESULT_DOMAINS,
     _BROWSER_SPECS, _ALIASES,
     _normalize_url, _native_navigate, _user_agent, _real_profile_dir,
     _firefox_profile_dir, _find_opera_windows, _find_exe_windows,
@@ -26,7 +26,25 @@ def browser_control(
     session_memory=None,
 ) -> str:
     params  = parameters or {}
-    action  = params.get("action", "").lower().strip()
+    # Accept model-friendly aliases for the action
+    action_raw = (
+        params.get("action")
+        or params.get("go_to")
+        or params.get("do")
+        or params.get("navigate")
+        or ""
+    )
+    action = action_raw.lower().strip()
+    # If the action is itself a URL, treat it as go_to
+    if action.startswith("http"):
+        action = "go_to"
+        params.setdefault("url", action_raw)
+    # If url is provided but action is missing/empty, default to go_to
+    if not action and params.get("url"):
+        action = "go_to"
+    # If neither action nor url, fail helpfully
+    if not action and not params.get("url"):
+        return "browser_control needs an action (e.g. 'go_to') or a url."
     browser = params.get("browser", "").lower().strip() or None
     result  = "Unknown action."
 
@@ -48,22 +66,19 @@ def browser_control(
 
     # Navigation-only: use real browser — never spin up Playwright (avoids about:blank window).
     if _USE_NATIVE_NAV and action == "go_to":
-        result = _native_navigate(params.get("url", ""), browser)
+        url = params.get("url") or action_raw
+        result = _native_navigate(url, browser)
         _log(player, result)
         return result
 
     if _USE_NATIVE_NAV and action == "search":
-        from urllib.parse import quote_plus
-        _engines = {
-            "google": "https://www.google.com/search?q=",
-            "bing": "https://www.bing.com/search?q=",
-            "duckduckgo": "https://duckduckgo.com/?q=",
-            "yandex": "https://yandex.com/search/?text=",
-        }
-        engine = (params.get("engine") or "google").lower()
-        base = _engines.get(engine, _engines["google"])
+        from actions.browser_native import is_visual_product_query
+        from config import DEFAULT_SEARCH_ENGINE, search_engine_url
+
+        engine = (params.get("engine") or DEFAULT_SEARCH_ENGINE).lower()
         query = params.get("query", "")
-        result = _native_navigate(base + quote_plus(query), browser)
+        url = search_engine_url(query, engine, images=is_visual_product_query(query))
+        result = _native_navigate(url, browser)
         _log(player, result)
         return result
 
@@ -83,7 +98,12 @@ def browser_control(
         if action == "go_to":
             result = sess.run(sess.go_to(params.get("url", "")))
         elif action == "search":
-            result = sess.run(sess.search(params.get("query", ""), params.get("engine", "google")))
+            from config import DEFAULT_SEARCH_ENGINE
+
+            result = sess.run(sess.search(
+                params.get("query", ""),
+                params.get("engine", DEFAULT_SEARCH_ENGINE),
+            ))
         elif action == "click":
             result = sess.run(sess.click(params.get("selector"), params.get("text")))
         elif action == "type":

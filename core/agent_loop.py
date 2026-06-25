@@ -1,4 +1,4 @@
-"""Autonomous tool-use loop (ReAct-style) for ARIA.
+"""Autonomous tool-use loop (ReAct-style) for NEO.
 
 Instead of routing by regex or pre-planning a fixed list of independent steps,
 this gives the model a goal + the live tool schemas and lets it decide the next
@@ -26,15 +26,8 @@ from typing import Any, Callable, Protocol
 from hybrid.registry import ToolRegistry
 from hybrid.types import ExecutionContext
 
-DEFAULT_AGENT_MODEL = "gemini-2.5-flash"
+from core.models import PRIMARY as DEFAULT_AGENT_MODEL
 DEFAULT_MAX_STEPS = 12
-BUILD_MAX_STEPS = 40  # building a real multi-file project needs a bigger budget
-
-# Gemini 2.5 "thinking" budgets (tokens). The free tier has no pro access, so the
-# quality lever is letting flash reason before it acts. The plan is a one-shot,
-# high-leverage call (bigger budget); each build step gets a modest budget.
-BUILD_PLAN_THINKING = 8192
-BUILD_STEP_THINKING = 2048
 
 # Cap a single tool result fed back into context. Long dev_run logs would
 # otherwise crowd out the plan and earlier files, making flash lose the thread.
@@ -43,7 +36,7 @@ _MAX_RESULT_CHARS = 4000
 # Tool results that must halt the loop and hand control back to the human.
 _STOP_PREFIXES = ("NEEDS_CONFIRM", "NEEDS_USER")
 
-AGENT_SYSTEM_PROMPT = """You are ARIA's autonomous task agent.
+AGENT_SYSTEM_PROMPT = """You are NEO's autonomous task agent.
 
 You are given a goal and a set of tools. Work toward the goal by deciding ONE next
 action at a time: call the most appropriate tool, observe the real result, then
@@ -61,60 +54,6 @@ Principles:
 - If you are missing information only the user can provide, ask one concise question
   instead of guessing.
 """
-
-
-BUILD_SYSTEM_PROMPT = """You are ARIA's autonomous software builder — a senior engineer
-who ships small, real, working projects end to end.
-
-You are given a goal, a project folder, and a build plan you already wrote. Follow the
-plan, but adapt it from real results. Build something a real person would actually use,
-not a toy stub.
-
-Quality bar (this is what "smart" means — do not skip it):
-- Write COMPLETE, production-quality code for every file. Never leave placeholders,
-  TODOs, `pass`, "implement later", or stubbed functions. If you name it, you build it.
-- Deliver the real features the goal implies, not a hello-world. Handle the obvious
-  edge cases and errors. Make the UI/output look intentional, not default.
-- Keep the project coherent: file names, imports, routes, and config must line up
-  across files. Re-read a file with file_controller (action="read_file") if unsure
-  what you wrote.
-- Always include a short README.md with what it is and the exact run command, and a
-  dependency manifest (requirements.txt / package.json) when there are dependencies.
-
-How to work — decide ONE action at a time and read the real result:
-- Pick the simplest stack that fully satisfies the goal. Use web_search only to check
-  a specific unfamiliar API or version — don't research what you already know.
-- Write each file with file_controller (action="create_file", an absolute path inside
-  the given project folder, the FULL real code in "content").
-- After the files exist, INSTALL dependencies and RUN the project with dev_run (pass
-  project_dir). Read the real stdout/stderr/exit code.
-- If it fails, read the ACTUAL error, fix the specific file(s) with file_controller,
-  and run again. Repeat until it runs cleanly with no traceback.
-- For a static website you don't need to run a server — just create the files and open
-  the entry point once with dev_run if useful.
-- Stay strictly inside the given project folder. Never touch unrelated files.
-
-When the project runs cleanly (or is complete for a static site), STOP and reply with a
-short summary of what you built, the file layout, and the exact command to run it. Do
-not keep going once it genuinely works — but do not stop early on a half-built project.
-"""
-
-
-BUILD_PLAN_PROMPT = """You are a senior software architect. Given a build request and a
-target folder, produce a SHORT, concrete build plan for a small but real, working project.
-
-Return PLAIN TEXT (no markdown headers, no code) in exactly this shape:
-
-Stack: <language + key libraries/framework, and why in <=10 words>
-Files:
-- <relative/path> — <one line: what it contains>
-- <relative/path> — <one line>
-(list every file you will create, including README.md and any requirements.txt/package.json)
-Features: <the 2-5 real capabilities the project must actually have>
-Run: <the exact command(s) to install deps and run it>
-
-Keep it tight and buildable in a handful of files. Choose the simplest stack that
-delivers the real features. Do not write code here — just the plan."""
 
 
 # --------------------------------------------------------------------------- #
@@ -350,108 +289,4 @@ class GeminiToolSession:
         return (resp.choices[0].message.content or "Reached the action limit.").strip()
 
 
-# --------------------------------------------------------------------------- #
-# Autonomous project builder — a scoped variant of the loop                    #
-# --------------------------------------------------------------------------- #
 
-_BUILD_TOOLS = ("file_controller", "web_search", "code_helper")
-
-
-def build_registry() -> ToolRegistry:
-    """A curated registry for the build loop: write files, research, run & test.
-
-    Keeps the command runner (dev_run) OUT of the global, always-on toolset — it
-    only exists inside an explicitly-confirmed build.
-    """
-    glob = ToolRegistry.instance()
-    sub = ToolRegistry()
-    for name in _BUILD_TOOLS:
-        tool = glob.lookup(name)
-        if tool is not None:
-            sub._tools[name] = tool
-
-    from actions.dev_run import dev_run as _dev_run
-
-    sub.register(
-        name="dev_run",
-        description=(
-            "Run a shell command INSIDE the project folder to install dependencies or "
-            "run/test the app, e.g. 'pip install flask', 'python main.py', 'npm install'. "
-            "Returns the real stdout/stderr + exit code so you can read errors and fix them."
-        ),
-        parameters={
-            "type": "OBJECT",
-            "properties": {
-                "command": {"type": "STRING", "description": "Command, e.g. 'python main.py' or 'pip install flask'"},
-                "project_dir": {"type": "STRING", "description": "Absolute path to the project folder"},
-                "timeout": {"type": "INTEGER", "description": "Max seconds (default 60)"},
-            },
-            "required": ["command", "project_dir"],
-        },
-        handler=lambda args, ctx: _dev_run(parameters=args, player=getattr(ctx, "ui", None)),
-        category="dev",
-        agent="system",
-    )
-    return sub
-
-
-def plan_build(goal: str) -> str:
-    """Architect a concrete build plan before any code is written.
-
-    A one-shot, thinking-on call: deciding the stack and file layout up front keeps
-    a multi-file project coherent instead of flash improvising file-by-file.
-    Returns plain-text plan, or "" if planning fails (the loop still runs).
-    """
-    import time
-
-    from core.llm import ask
-
-    for attempt in range(3):
-        try:
-            return ask(
-                goal,
-                model=DEFAULT_AGENT_MODEL,
-                system=BUILD_PLAN_PROMPT,
-                temperature=0.2,
-                thinking_budget=BUILD_PLAN_THINKING,
-            ).strip()
-        except Exception as e:  # noqa: BLE001
-            if attempt < 2 and any(c in str(e) for c in ("429", "503", "500", "UNAVAILABLE")):
-                time.sleep(2 * (attempt + 1))
-                continue
-            return ""
-    return ""
-
-
-def run_build(
-    goal: str,
-    ctx: ExecutionContext | None = None,
-    *,
-    on_step: Callable[[Step], None] | None = None,
-    on_plan: Callable[[str], None] | None = None,
-    max_steps: int = BUILD_MAX_STEPS,
-) -> AgentResult:
-    """Run the autonomous build loop: architect a plan, then build against it."""
-    registry = build_registry()
-
-    plan = plan_build(goal)
-    if plan and on_plan:
-        try:
-            on_plan(plan)
-        except Exception:
-            pass
-
-    build_goal = goal if not plan else f"{goal}\n\n--- Your build plan ---\n{plan}"
-    session = GeminiToolSession(
-        build_goal,
-        system=BUILD_SYSTEM_PROMPT,
-        tools=registry.to_gemini_declarations(),
-        thinking_budget=BUILD_STEP_THINKING,
-    )
-    return run_agent(
-        build_goal, ctx,
-        registry=registry,
-        session=session,
-        max_steps=max_steps,
-        on_step=on_step,
-    )

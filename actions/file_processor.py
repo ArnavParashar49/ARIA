@@ -1,5 +1,5 @@
 """
-file_processor.py — ARIA Universal File Processor
+file_processor.py — NEO Universal File Processor
 
 Supported types:
   image   → describe, ocr, resize, convert, compress, crop
@@ -26,6 +26,7 @@ from pathlib import Path
 from datetime import datetime
 
 from core.llm import ask
+from core.models import FILE_ANALYSIS as _FILE_MODEL
 
 
 def _detect_type(path: Path) -> str:
@@ -88,7 +89,7 @@ def _process_image(path: Path, action: str, params: dict, speak=None) -> str:
             if params.get("instruction"):
                 prompt = params["instruction"]
 
-            result   = ask(prompt, model="gemini-2.5-flash", images=[img])
+            result   = ask(prompt, model=_FILE_MODEL, images=[img])
 
             if len(result) > 500 and params.get("save", True):
                 out = _output_path(path, "result", ".txt")
@@ -194,7 +195,7 @@ def _process_pdf(path: Path, action: str, params: dict, speak=None) -> str:
             "reformat":       f"Reformat this text cleanly with proper structure:\n\n{text}",
         }
         try:
-            result   = ask(prompt_map.get(action, f"Analyze:\n\n{text}"), model="gemini-2.5-flash")
+            result   = ask(prompt_map.get(action, f"Analyze:\n\n{text}"), model=_FILE_MODEL,)
             if len(result) > 600 and params.get("save", True):
                 out = _output_path(path, action, ".txt")
                 out.write_text(result, encoding="utf-8")
@@ -282,7 +283,7 @@ def _process_text_doc(path: Path, file_type: str, action: str,
         instruction = action
 
     try:
-        result   = ask(prompt_map[action], model="gemini-2.5-flash")
+        result   = ask(prompt_map[action], model=_FILE_MODEL,)
         if len(result) > 600 and params.get("save", True):
             out = _output_path(path, action, ".txt")
             out.write_text(result, encoding="utf-8")
@@ -327,7 +328,7 @@ def _process_data(path: Path, file_type: str, action: str,
                    f"Rows: {len(df)}\nPreview:\n{preview}\n\n"
                    f"Give insights, patterns, and notable findings.")
         try:
-            return ask(prompt, model="gemini-2.5-flash")
+            return ask(prompt, model=_FILE_MODEL,)
         except Exception as e:
             return f"AI analysis failed: {e}"
 
@@ -381,7 +382,7 @@ def _process_data(path: Path, file_type: str, action: str,
     try:
         return ask(
             f"Task: {action}\nDataset ({len(df)} rows, cols: {list(df.columns)}):\n{preview}",
-            model="gemini-2.5-flash",
+            model=_FILE_MODEL,
         )
     except Exception as e:
         return f"Processing failed: {e}"
@@ -409,7 +410,7 @@ def _process_json(path: Path, action: str, params: dict, speak=None) -> str:
         if params.get("instruction"):
             prompt = f"{params['instruction']}\n\nJSON data:\n{preview}"
         try:
-            return ask(prompt, model="gemini-2.5-flash")
+            return ask(prompt, model=_FILE_MODEL,)
         except Exception as e:
             return f"AI processing failed: {e}"
 
@@ -471,7 +472,7 @@ def _process_code(path: Path, action: str, params: dict, speak=None) -> str:
         prompt = prompt_map[action]
 
     try:
-        result   = ask(prompt, model="gemini-2.5-flash")
+        result   = ask(prompt, model=_FILE_MODEL,)
 
         if action in ("fix", "optimize", "document") and params.get("save", True):
             out = _output_path(path, action)
@@ -512,7 +513,7 @@ def _process_audio(path: Path, action: str, params: dict, speak=None) -> str:
             }.get(path.suffix.lstrip(".").lower(), "audio/mpeg")
             result = ask(
                 "Transcribe all speech in this audio file accurately.",
-                model="gemini-2.5-flash",
+                model=_FILE_MODEL,
                 images=[_genai_types.Part.from_bytes(data=content, mime_type=mime)],
             )
             if params.get("save", True):
@@ -741,7 +742,7 @@ def _process_pptx(path: Path, action: str, params: dict, speak=None) -> str:
             return f"Text extracted. Saved: {out.name}"
         try:
             prompt   = f"{'Summarize' if action == 'summarize' else 'Analyze'} this presentation:\n{text[:30000]}"
-            return ask(prompt, model="gemini-2.5-flash")
+            return ask(prompt, model=_FILE_MODEL,)
         except Exception as e:
             return f"AI processing failed: {e}"
 
@@ -772,7 +773,7 @@ def file_processor(parameters: dict, player=None, speak=None) -> str:
         try:
             content = path.read_text(encoding="utf-8", errors="ignore")[:10000]
             prompt  = f"File: {path.name}\nContent preview:\n{content}\n\nTask: {action or instruction or 'Describe what this file contains and what can be done with it.'}"
-            return ask(prompt, model="gemini-2.5-flash")
+            return ask(prompt, model=_FILE_MODEL,)
         except Exception as e:
             return f"Unknown file type ({path.suffix}). Could not process: {e}"
 

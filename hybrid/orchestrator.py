@@ -61,13 +61,13 @@ class Orchestrator:
             self.tool_agent,
         ]
 
-    def build_context(self, aria: Any) -> ExecutionContext:
+    def build_context(self, neo: Any) -> ExecutionContext:
         return ExecutionContext(
-            ui=getattr(aria, "ui", None),
-            speak=getattr(aria, "speak", None),
-            last_user_log=getattr(aria, "_last_user_log", ""),
+            ui=getattr(neo, "ui", None),
+            speak=getattr(neo, "notify_user", getattr(neo, "speak", None)),
+            last_user_log=getattr(neo, "_last_user_log", ""),
             session_memory=None,
-            extras={"aria": aria, "orchestrator": self},
+            extras={"neo": neo, "orchestrator": self},
         )
 
     def try_fast_path(self, user_text: str, ctx: ExecutionContext) -> ToolResult | None:
@@ -114,7 +114,7 @@ class Orchestrator:
         if pre_hook:
             pre_hook(name, args, ctx)
 
-        if name == "shutdown_aria":
+        if name == "shutdown_neo":
             return self._handle_shutdown(ctx)
 
         task = AgentTask.new(
@@ -129,9 +129,23 @@ class Orchestrator:
             result.data["silent"] = True
 
         if name == "web_search" and result.ok:
-            aria = ctx.get("aria")
-            if aria is not None:
-                aria._last_search_result = result.text
+            neo = ctx.get("neo")
+            if neo is not None:
+                neo._last_search_result = result.text
+            try:
+                from core.action_context import set_web_search
+
+                set_web_search(
+                    query=args.get("query", ""),
+                    summary=result.text or "",
+                )
+            except Exception as e:
+                print(f"[Orchestrator] action_context web_search: {e}")
+
+        if name == "flight_finder" and result.ok:
+            neo = ctx.get("neo")
+            if neo is not None:
+                neo._last_search_result = result.text
 
         if post_hook:
             post_hook(name, args, ctx, result)
@@ -139,17 +153,26 @@ class Orchestrator:
         return result
 
     def _handle_shutdown(self, ctx: ExecutionContext) -> ToolResult:
-        print("[ARIA] Shutdown requested.")
+        print("[NEO] Shutdown requested.")
 
         def _shutdown():
             time.sleep(0.4)
             os._exit(0)
 
         threading.Thread(target=_shutdown, daemon=True).start()
-        return ToolResult(ok=True, text="Goodbye.", tool_name="shutdown_aria")
+        return ToolResult(ok=True, text="Goodbye.", tool_name="shutdown_neo")
 
     def run_planned_sync(self, goal: str, ctx: ExecutionContext) -> str:
-        """Planned path: one planner LLM call + executor (reuses agent/executor)."""
+        """Planned path: GoalDispatcher for multi-task, then planner for complex single goals."""
+        # First check if this is actually multiple independent goals
+        from core.goal_dispatcher import get_dispatcher, split_goals
+        goals = split_goals(goal)
+        if len(goals) >= 2:
+            print(f"[Orchestrator] GoalDispatcher: {len(goals)} independent goals, dispatching in parallel")
+            result = get_dispatcher().dispatch(goal, ctx)
+            return result.summary
+
+        # Single complex goal -> planner + executor
         task = AgentTask.new(goal, ExecutionMode.PLANNED, user_text=goal)
         self.bus.emit("task.start", {"goal": goal, "mode": "planned"}, task_id=task.id)
 
@@ -157,13 +180,14 @@ class Orchestrator:
         if not plan_result.ok:
             return plan_result.text
 
+        from core.session_state import save_session, clear_session
+        save_session({"goal": goal, "mode": "planned", "task_id": task.id})
+
         plan = plan_result.data.get("plan") or {}
         steps = plan.get("steps") or []
         if not steps:
-            from agent.task_queue import get_queue, TaskPriority
-
-            task_id = get_queue().submit(goal=goal, priority=TaskPriority.NORMAL, speak=ctx.speak)
-            return f"Task started (ID: {task_id})."
+            clear_session()
+            return f"No steps generated for goal: '{goal}'."
 
         independent: list[dict] = []
         dependent: list[dict] = []
@@ -173,6 +197,9 @@ class Orchestrator:
                 dependent.append(step)
             else:
                 independent.append(step)
+
+        if ctx.speak and len(independent) > 0:
+            ctx.speak(f"I've created a plan with {len(steps)} steps. Starting {len(independent)} tasks in parallel.", interrupt=False)
 
         def run_step(step: dict) -> tuple[int, str]:
             tool = step.get("tool", "")
@@ -185,6 +212,8 @@ class Orchestrator:
             )
             res = self._dispatch_to_agent(sub, ctx)
             num = int(step.get("step", 0))
+            if ctx.speak:
+                ctx.speak(f"Step {num} completed.", interrupt=False)
             return num, res.text
 
         with ThreadPoolExecutor(max_workers=min(4, max(1, len(independent)))) as pool:
@@ -198,9 +227,10 @@ class Orchestrator:
             task.step_results[num] = text
 
         verify = self.verifier.run(task, ctx)
+        clear_session()
         if not verify.ok:
             return verify.text
-
+        
         parts = [str(v) for v in task.step_results.values() if v]
         final = " ".join(parts)[:2000] if parts else plan_result.text
         task.final_result = final
@@ -210,16 +240,16 @@ class Orchestrator:
     async def execute_tool_for_live(
         self,
         fc: Any,
-        aria: Any,
+        neo: Any,
         *,
         on_finish: Any = None,
     ) -> Any:
-        """Async wrapper used by AriaLive._execute_tool."""
+        """Async wrapper used by NeoLive._execute_tool."""
         from google.genai import types
 
         name = fc.name
         args = dict(fc.args or {})
-        ctx = self.build_context(aria)
+        ctx = self.build_context(neo)
         loop = asyncio.get_event_loop()
 
         try:
@@ -230,8 +260,8 @@ class Orchestrator:
         except Exception as e:
             traceback.print_exc()
             result = ToolResult(ok=False, text=f"Tool '{name}' failed: {e}", tool_name=name)
-            if hasattr(aria, "speak_error"):
-                aria.speak_error(name, e)
+            if hasattr(neo, "speak_error"):
+                neo.speak_error(name, e)
 
         if on_finish:
             on_finish(name, result)

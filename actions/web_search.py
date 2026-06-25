@@ -225,7 +225,7 @@ def web_search(
                             print(f"[WebSearch] ⚠️ Visual on_done: {cb_err}")
 
             import threading
-            threading.Thread(target=run, daemon=True, name="ARIA-web-visuals").start()
+            threading.Thread(target=run, daemon=True, name="NEO-web-visuals").start()
         except Exception as ve:
             print(f"[WebSearch] ⚠️ Visual feed: {ve}")
 

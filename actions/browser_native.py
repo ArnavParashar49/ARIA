@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
+import os
 import platform
+import re
+import shutil
 import subprocess
 import time
 import webbrowser
 
 _OS = platform.system()
+
+_VISUAL_QUERY_RE = re.compile(
+    r"\b(image|photo|picture|pic|cover|case|product|option|options|buy|shop|shopping|"
+    r"price|laptop|phone|tablet|watch|tv|monitor|headphone|speaker|camera|shoe|"
+    r"dress|outfit|furniture|design|style|look|see|show|display|view|compare|best|"
+    r"back\s+cover|phone\s+case|minimal|minimalist)\b",
+    re.IGNORECASE,
+)
+
+
+def is_visual_product_query(text: str) -> bool:
+    return bool(_VISUAL_QUERY_RE.search(text or ""))
 
 LOGIN_URL_MARKERS = (
     "accounts.google.com",
@@ -32,6 +47,100 @@ def is_gmail_compose(url: str) -> bool:
 def open_in_user_browser(url: str, browser: str | None = None) -> str:
     """Open URL in the user's normal browser and bring it to the front."""
     return navigate_user_browser(url, browser)
+
+
+def open_google_images(query: str, browser: str | None = None) -> str:
+    """Open image search for a query (uses default search engine)."""
+    from config import search_engine_url
+
+    q = (query or "").strip()
+    if not q:
+        return "NEEDS_USER: What should I search for?"
+    url = search_engine_url(q, images=True)
+    print(f"[BrowserNative] Image search: {q!r}")
+    return navigate_user_browser(url, browser)
+
+
+def _find_chrome_exe() -> str | None:
+    candidates = [
+        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+        os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return shutil.which("chrome") or shutil.which("google-chrome")
+
+
+def _find_edge_exe() -> str | None:
+    candidates = [
+        os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+        os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return shutil.which("msedge")
+
+
+def _find_firefox_exe() -> str | None:
+    candidates = [
+        os.path.expandvars(r"%ProgramFiles%\Mozilla Firefox\firefox.exe"),
+        os.path.expandvars(r"%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe"),
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return shutil.which("firefox")
+
+
+def _activate_browser_window(*title_parts: str) -> None:
+    if _OS == "Windows":
+        try:
+            import pygetwindow as gw
+            for part in title_parts:
+                for win in gw.getAllWindows():
+                    title = (win.title or "").lower()
+                    if part.lower() in title and title.strip():
+                        if win.isMinimized:
+                            win.restore()
+                        win.activate()
+                        return
+        except Exception:
+            pass
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            matches: list[int] = []
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def _enum(hwnd, _lparam):
+                if not user32.IsWindowVisible(hwnd):
+                    return True
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length <= 0:
+                    return True
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value.lower()
+                if any(p.lower() in title for p in title_parts):
+                    matches.append(hwnd)
+                return True
+
+            user32.EnumWindows(_enum, 0)
+            if matches:
+                hwnd = matches[0]
+                user32.ShowWindow(hwnd, 9)
+                user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+        return
+
+    if _OS == "Darwin":
+        for app in title_parts:
+            activate_app(app)
 
 
 def _esc_url(url: str) -> str:
@@ -104,7 +213,7 @@ _DOWNLOAD_CLICK_JS = (
     "if(go(el))return 'clicked:'+sels[i];}"
     "var nodes=[].slice.call(document.querySelectorAll('a,button,[role=button]'));"
     "for(var j=0;j<nodes.length;j++){"
-    "var t=(nodes[j].textContent||nodes[j].getAttribute('aria-label')||'').trim();"
+    "var t=(nodes[j].textContent||nodes[j].getAttribute('neo-label')||'').trim();"
     "if(/^download\\b/i.test(t)||/\\bdownload\\s+(for\\s+)?(mac|macos|windows)/i.test(t)){"
     "if(go(nodes[j]))return 'clicked:text:'+t.slice(0,48);}}"
     "return 'none';})();"
@@ -146,17 +255,13 @@ def native_app_download_from_google(app_name: str, browser: str | None = None) -
     if not app:
         return "FAILED: Which app should I download?"
 
+    # Dynamic lookup — no hardcoded truth table
+    official = None
     try:
-        from actions.browser_control import _OFFICIAL_APP_URLS
+        from actions.browser_control import _app_download_hint
+        official = _app_download_hint(app)
     except ImportError:
-        _OFFICIAL_APP_URLS = {}
-
-    official = _OFFICIAL_APP_URLS.get(app.lower())
-    if not official:
-        for name, url in _OFFICIAL_APP_URLS.items():
-            if app.lower().replace(" ", "") == name.replace(" ", ""):
-                official = url
-                break
+        pass
 
     search_q = f"download {app}"
     google_url = "https://www.google.com/search?q=" + quote_plus(search_q)
@@ -272,13 +377,39 @@ def navigate_user_browser(url: str, browser: str | None = None) -> str:
             return f"FAILED: Could not open {url} — {e}"
 
     if _OS == "Windows":
-        if name in ("edge", "msedge", "microsoft edge"):
-            subprocess.run(["start", "msedge", url], shell=True, check=False)
-        elif name == "firefox":
-            subprocess.run(["start", "firefox", url], shell=True, check=False)
-        else:
-            subprocess.run(["start", "chrome", url], shell=True, check=False)
-        return f"Opened: {url}"
+        name = (browser or "chrome").strip().lower()
+        launched = False
+        try:
+            if name in ("edge", "msedge", "microsoft edge"):
+                exe = _find_edge_exe()
+                if exe:
+                    subprocess.Popen([exe, url], close_fds=True)
+                    launched = True
+                    _activate_browser_window("Edge", "Microsoft Edge")
+            elif name == "firefox":
+                exe = _find_firefox_exe()
+                if exe:
+                    subprocess.Popen([exe, url], close_fds=True)
+                    launched = True
+                    _activate_browser_window("Firefox", "Mozilla")
+            else:
+                exe = _find_chrome_exe()
+                if exe:
+                    subprocess.Popen([exe, url], close_fds=True)
+                    launched = True
+                    _activate_browser_window("Chrome", "Google Chrome")
+            if not launched:
+                os.startfile(url)
+                launched = True
+                _activate_browser_window("Chrome", "Google Chrome", "Edge", "Firefox")
+        except Exception as e:
+            print(f"[BrowserNative] Windows open failed ({e}), trying webbrowser")
+            webbrowser.open(url)
+            launched = True
+        if launched:
+            time.sleep(0.35)
+            return f"Opened: {url}"
+        return f"FAILED: Could not open {url}"
 
     webbrowser.open(url)
     return f"Opened: {url}"
@@ -349,7 +480,7 @@ def wait_for_url(
 
 _GMAIL_SEND_JS = (
     "(function(){var b=[].slice.call(document.querySelectorAll('[role=button]'));"
-    "var s=b.find(function(el){var l=(el.getAttribute('aria-label')||"
+    "var s=b.find(function(el){var l=(el.getAttribute('neo-label')||"
     "el.getAttribute('data-tooltip')||'').toLowerCase();"
     "return l.indexOf('send')===0&&l.indexOf('feedback')<0;});"
     "if(s){s.click();return 'clicked';}return 'not_found';})();"

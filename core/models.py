@@ -1,4 +1,4 @@
-"""Multi-agent model routing for ARIA.
+"""Multi-agent model routing for NEO.
 
 Role → model mapping (override any via .env):
 
@@ -12,8 +12,8 @@ Role → model mapping (override any via .env):
   Fallbacks             OpenRouter → CometAPI
 
 Note: Groq was removed from the default fast/deep roles because it produced
-litellm provider errors during sub-agent dispatch. Set ARIA_MODEL_FAST /
-ARIA_MODEL_DEEP in .env to re-enable Groq (or any other provider) if desired.
+litellm provider errors during sub-agent dispatch. Set NEO_MODEL_FAST /
+NEO_MODEL_DEEP in .env to re-enable Groq (or any other provider) if desired.
 """
 
 from __future__ import annotations
@@ -34,29 +34,29 @@ def _model(env_key: str, default: str) -> str:
 
 
 # ── Agent roles ─────────────────────────────────────────────────────────────
-PRIMARY = _model("ARIA_MODEL_PRIMARY", _GEMINI_LITE)
-RESEARCH = _model("ARIA_MODEL_RESEARCH", _KIMI_K2)
-FILE_ANALYSIS = _model("ARIA_MODEL_FILE", _GEMINI_FLASH)
-VISION = _model("ARIA_MODEL_VISION", _GEMINI_FLASH)
-FAST_UTILITY = _model("ARIA_MODEL_FAST", _GEMINI_LITE)
-DEEP_ANALYSIS = _model("ARIA_MODEL_DEEP", "openrouter/anthropic/claude-sonnet-4-20250514")
+PRIMARY = _model("NEO_MODEL_PRIMARY", _GEMINI_LITE)
+RESEARCH = _model("NEO_MODEL_RESEARCH", _KIMI_K2)
+FILE_ANALYSIS = _model("NEO_MODEL_FILE", _GEMINI_FLASH)
+VISION = _model("NEO_MODEL_VISION", _GEMINI_FLASH)
+FAST_UTILITY = _model("NEO_MODEL_FAST", _GEMINI_LITE)
+DEEP_ANALYSIS = _model("NEO_MODEL_DEEP", "openrouter/anthropic/claude-sonnet-4-20250514")
 
 # Gemini Live voice session (google.genai model id, not litellm prefix)
 VOICE_LIVE = _model(
-    "ARIA_MODEL_VOICE",
+    "NEO_MODEL_VOICE",
     "models/gemini-2.5-flash-native-audio-preview-12-2025",
 )
 
 # Grounded web search requires Gemini + google_search tool
-WEB_SEARCH_GROUNDED = _model("ARIA_MODEL_WEB_SEARCH", _GEMINI_FLASH)
+WEB_SEARCH_GROUNDED = _model("NEO_MODEL_WEB_SEARCH", _GEMINI_FLASH)
 
 # ── Fallback chain (OpenRouter → CometAPI) ───────────────────────────────────
 FALLBACK_OPENROUTER = _model(
-    "ARIA_MODEL_FALLBACK_OPENROUTER",
+    "NEO_MODEL_FALLBACK_OPENROUTER",
     "openrouter/google/gemini-2.5-flash",
 )
 FALLBACK_COMETAPI = _model(
-    "ARIA_MODEL_FALLBACK_COMETAPI",
+    "NEO_MODEL_FALLBACK_COMETAPI",
     "cometapi/gpt-4o",
 )
 

@@ -1,10 +1,9 @@
-"""Siri-style slide-out overlay for ARIA (corner + margins configurable)."""
+"""Siri-style slide-out overlay for NEO (corner + margins configurable)."""
 
 from __future__ import annotations
 
 import json
 import math
-import random
 import time
 from pathlib import Path
 
@@ -17,7 +16,7 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QBrush, QColor, QKeySequence, QPainter, QPainterPath, QPen, QRegion, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QPainterPath, QPen, QRegion, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -32,18 +31,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ui_hud_threejs import HAS_WEBENGINE, ThreeJSOrbCanvas
+from ui_prism_orb import PrismOrb
 from ui_theme import C, RADIUS_M, ui_font
-from ui_buddy import PixelBuddy
 
 _CONFIG_FILE = Path(__file__).resolve().parent / "config" / "api_keys.json"
-_ORB_SIZE = 72  # robot buddy — fits inside the 80px disc (no clipping, centred)
-_DISC_SIZE = 80  # circular backdrop — orb may extend past it (clipped to disc)
-_PANEL_ALPHA = 153  # ~60% opacity
+_ORB_SIZE = 96  # PRISM-style responsive orb
+_DISC_SIZE = 96
 _DISMISS_LEAD_MS = 2000
 _DEFAULT_MARGIN_X = 14
 _DEFAULT_MARGIN_Y = 36
-_DEFAULT_CORNER = "top-right"
+_DEFAULT_CORNER = "top-center"
 _SLIDE_MS = 300
 _SLIDE_IN_MS = 480
 _SLIDE_IN_MS_FAST = 260   # smooth glide-in (was a near-instant 140)
@@ -55,24 +52,10 @@ _CAMERA_SLIDE_IN_MS = 220
 _COLLAPSE_MS = 380
 _HIDE_AFTER_STANDBY_MS = 7000
 _EXPANDED_W = 440
-_EXPANDED_H = 400
+_EXPANDED_H = 520
 _EXPANDED_RADIUS = 24
 _MIN_PANEL_W = 360
-_MIN_PANEL_H = 280
-
-
-class _CircleBackdrop(QWidget):
-    """Circular dim disc drawn snug behind the orb."""
-
-    def paintEvent(self, _event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        side = min(self.width(), self.height())
-        inset = 0.5
-        rect = QRectF(inset, inset, side - inset * 2, side - inset * 2)
-        p.setPen(QPen(QColor(255, 255, 255, 72), 1.2))
-        p.setBrush(QBrush(QColor(28, 28, 32, _PANEL_ALPHA)))
-        p.drawEllipse(rect)
+_MIN_PANEL_H = 460
 
 
 _PROMPTS = {
@@ -85,8 +68,19 @@ _PROMPTS = {
 }
 
 _VALID_CORNERS = frozenset(
-    {"top-left", "top-right", "bottom-left", "bottom-right"}
+    {
+        "top-left",
+        "top-center",
+        "top-right",
+        "bottom-left",
+        "bottom-center",
+        "bottom-right",
+    }
 )
+
+
+def _is_center_corner(corner: str) -> bool:
+    return corner in ("top-center", "bottom-center")
 
 
 def _load_siri_bar_layout() -> dict:
@@ -100,11 +94,16 @@ def _load_siri_bar_layout() -> dict:
     try:
         raw = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
         cfg = raw.get("siri_bar") or {}
-        corner = str(cfg.get("corner", layout["corner"])).lower().strip()
-        if corner in _VALID_CORNERS:
-            layout["corner"] = corner
-        layout["margin_x"] = max(0, int(cfg.get("margin_x", layout["margin_x"])))
-        layout["margin_y"] = max(0, int(cfg.get("margin_y", layout["margin_y"])))
+        if isinstance(cfg, str):
+            corner = cfg.lower().strip()
+            if corner in _VALID_CORNERS:
+                layout["corner"] = corner
+        elif isinstance(cfg, dict):
+            corner = str(cfg.get("corner", layout["corner"])).lower().strip()
+            if corner in _VALID_CORNERS:
+                layout["corner"] = corner
+            layout["margin_x"] = max(0, int(cfg.get("margin_x", layout["margin_x"])))
+            layout["margin_y"] = max(0, int(cfg.get("margin_y", layout["margin_y"])))
     except Exception:
         pass
     return layout
@@ -128,174 +127,52 @@ def _save_siri_bar_layout(layout: dict) -> None:
         print(f"[SiriBar] Could not save position: {exc}")
 
 
-class ParticleSphereWidget(QWidget):
-    """White particle sphere on black — matches WebGL look; no logo image."""
-
-    _POINTS = 1100
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self._angle_y = 0.0
-        self._angle_x = 0.35
-        self._energy = 0.06
-        self._speaking = False
-        self._muted = False
-        self._state = "STANDBY"
-        self._pts: list[tuple[float, float, float]] = []
-        for _ in range(self._POINTS):
-            phi = math.acos(2 * random.random() - 1)
-            theta = random.random() * math.tau
-            self._pts.append(
-                (
-                    math.sin(phi) * math.cos(theta),
-                    math.cos(phi),
-                    math.sin(phi) * math.sin(theta),
-                )
-            )
-
-    def set_audio_bands(self, bands: list[float]) -> None:
-        if not bands:
-            return
-        self._energy = min(1.0, max(0.05, (sum(bands) / max(len(bands), 1)) * 2.0))
-
-    @property
-    def speaking(self) -> bool:
-        return self._speaking
-
-    @speaking.setter
-    def speaking(self, value: bool) -> None:
-        self._speaking = value
-
-    @property
-    def muted(self) -> bool:
-        return self._muted
-
-    @muted.setter
-    def muted(self, value: bool) -> None:
-        self._muted = value
-
-    @property
-    def state(self) -> str:
-        return self._state
-
-    @state.setter
-    def state(self, value: str) -> None:
-        self._state = value
-
-    def _step(self) -> None:
-        spin = 0.004 if self._muted or self._state == "STANDBY" else 0.009
-        spin += self._energy * (0.018 if self._speaking else 0.01)
-        self._angle_y += spin
-        self._angle_x += 0.0025
-        self.update()
-
-    def paintEvent(self, _event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        w, h = self.width(), self.height()
-        cx, cy = w / 2, h / 2
-        scale = min(w, h) * 0.40
-        cy_r, sy = math.cos(self._angle_y), math.sin(self._angle_y)
-        cx_r, sx = math.cos(self._angle_x), math.sin(self._angle_x)
-        push = 0.12 + self._energy * (0.35 if self._speaking else 0.18)
-
-        for x, y, z in self._pts:
-            x1 = x * cy_r + z * sy
-            z1 = -x * sy + z * cy_r
-            y2 = y * cx_r - z1 * sx
-            z2 = y * sx + z1 * cx_r
-            z_cam = z2 + 2.35
-            if z_cam < 0.15:
-                continue
-            inv = 1.0 / z_cam
-            px = cx + x1 * scale * inv
-            py = cy + y2 * scale * inv
-            depth = (z_cam - 1.2) / 1.4
-            alpha = int(255 * max(0.35, min(1.0, 1.25 - depth * 0.85)))
-            rad = max(0.75, (1.05 + push * 1.1) * inv * scale * 0.011)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QBrush(QColor(252, 252, 255, alpha)))
-            p.drawEllipse(int(px - rad), int(py - rad), int(rad * 2), int(rad * 2))
-
-
 class SiriOrbSlot(QWidget):
-    """WebGL sphere when available; otherwise Qt particle sphere (never the ARIA logo)."""
+    """Fluid voice orb — audio-reactive, state-animated."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        self._stack = QStackedWidget(self)
-        lay.addWidget(self._stack)
-
-        self._particles = PixelBuddy()
-        self._particles.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self._stack.addWidget(self._particles)
-        self._web = None  # robot buddy replaces the WebGL / particle sphere
-
-        self._stack.setCurrentWidget(self._particles)
-        self._using_web = False
-
-    def _on_web_loaded(self, ok: bool) -> None:
-        if ok and self._web is not None:
-            self._stack.setCurrentWidget(self._web)
-            self._using_web = True
-            print("[SiriBar] WebGL particle sphere active")
-        else:
-            print("[SiriBar] WebGL unavailable — using Qt particle sphere")
-
-    @property
-    def uses_webgl(self) -> bool:
-        return self._using_web
-
-    def _active(self):
-        return self._web if self._using_web and self._web else self._particles
+        self._orb = PrismOrb()
+        self._orb.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        lay.addWidget(self._orb)
 
     def set_audio_bands(self, bands: list[float]) -> None:
-        self._particles.set_audio_bands(bands)
-        if self._web:
-            self._web.set_audio_bands(bands)
+        self._orb.set_audio_bands(bands)
 
     def _step(self) -> None:
-        pass  # PixelBuddy self-animates via its own timer
+        pass  # PrismOrb self-timers
 
     def set_hover(self, on: bool) -> None:
-        self._particles.hover(on)
+        self._orb.set_hover(on)
 
     def trigger_spin(self) -> None:
-        self._particles.spin()
+        self._orb.trigger_pulse()
 
     @property
     def speaking(self) -> bool:
-        return self._active().speaking
+        return self._orb.speaking
 
     @speaking.setter
     def speaking(self, value: bool) -> None:
-        self._particles.speaking = value
-        if self._web:
-            self._web.speaking = value
+        self._orb.speaking = value
 
     @property
     def muted(self) -> bool:
-        return self._active().muted
+        return self._orb.muted
 
     @muted.setter
     def muted(self, value: bool) -> None:
-        self._particles.muted = value
-        if self._web:
-            self._web.muted = value
+        self._orb.muted = value
 
     @property
     def state(self) -> str:
-        return self._active().state
+        return self._orb.state
 
     @state.setter
     def state(self, value: str) -> None:
-        self._particles.state = value
-        if self._web:
-            self._web.state = value
+        self._orb.state = value
 
 
 class SiriBarWindow(QWidget):
@@ -360,7 +237,7 @@ class SiriBarWindow(QWidget):
 
         self.setWindowFlags(
             Qt.WindowType.Window
-            | Qt.WindowType.WindowDoesNotAcceptFocus
+            | Qt.WindowType.Tool
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.NoDropShadowWindowHint
@@ -377,7 +254,7 @@ class SiriBarWindow(QWidget):
         from ui_theme import panel_card_compact_stylesheet
 
         self._panel_card = QFrame(self)
-        self._panel_card.setObjectName("ariaPanelCard")
+        self._panel_card.setObjectName("neoPanelCard")
         self._panel_card.setStyleSheet(panel_card_compact_stylesheet())
         card_lay = QVBoxLayout(self._panel_card)
         card_lay.setContentsMargins(0, 0, 0, 0)
@@ -397,20 +274,18 @@ class SiriBarWindow(QWidget):
         self._stack_host.setFixedSize(_DISC_SIZE, _DISC_SIZE)
         self._stack_host.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         stack_wrap = QWidget()
+        stack_wrap.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        stack_wrap.setStyleSheet("background: transparent;")
         stack_wrap_lay = QVBoxLayout(stack_wrap)
         stack_wrap_lay.setContentsMargins(0, 0, 0, 0)
         stack_wrap_lay.addWidget(
             self._stack_host,
             alignment=Qt.AlignmentFlag.AlignCenter,
         )
+        self._view_stack.setStyleSheet("background: transparent;")
         self._view_stack.addWidget(stack_wrap)
 
         self._camera_shell = self._build_camera_shell()
-
-        self._panel = _CircleBackdrop(self._stack_host)
-        self._panel.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self._panel.setGeometry(0, 0, _DISC_SIZE, _DISC_SIZE)
-        self._panel.hide()  # no disc behind the robot buddy
 
         self._orb = SiriOrbSlot(self._stack_host)
         self._orb.setFixedSize(_ORB_SIZE, _ORB_SIZE)
@@ -469,8 +344,8 @@ class SiriBarWindow(QWidget):
         self.req_apply_state.connect(self.apply_ui_state)
         self.req_set_prompt.connect(self.set_prompt_text)
         self.req_append_log.connect(self.append_log_instant)
-        self.req_stream.connect(self.update_aria_stream)
-        self.req_stream_end.connect(self.finish_aria_stream)
+        self.req_stream.connect(self.update_neo_stream)
+        self.req_stream_end.connect(self.finish_neo_stream)
         self.req_progress_start.connect(self.start_progress)
         self.req_set_activity.connect(self.set_activity)
         self.req_progress_stop.connect(self.stop_progress)
@@ -541,8 +416,7 @@ class SiriBarWindow(QWidget):
         return t.startswith("i'm listening") or t == _PROMPTS["LISTENING"].lower()
 
     def _tick_orb(self):
-        if hasattr(self._orb, "_step"):
-            self._orb._step()
+        self._orb._step()
 
     def _push_orb_bands(self, bands):
         self._orb.set_audio_bands(bands if isinstance(bands, list) else [])
@@ -566,7 +440,7 @@ class SiriBarWindow(QWidget):
             ).start()
 
     def _on_stream_end(self, body: str, formatted):
-        self._log.end_aria_stream(body, formatted if formatted else None)
+        self._log.end_neo_stream(body, formatted if formatted else None)
 
     def _screen_rect(self) -> QRect:
         if self.isVisible():
@@ -591,7 +465,9 @@ class SiriBarWindow(QWidget):
         """Grow a square panel from the orb, aligned to its dock corner."""
         corner = self._layout.get("corner", _DEFAULT_CORNER)
         w, h = _EXPANDED_W, _EXPANDED_H
-        if corner.endswith("right"):
+        if _is_center_corner(corner):
+            x = orb.center().x() - w // 2
+        elif corner.endswith("right"):
             x = orb.right() - w + 1
         else:
             x = orb.left()
@@ -605,7 +481,9 @@ class SiriBarWindow(QWidget):
         """Compact orb rect anchored to the same corner as the expanded panel."""
         corner = self._layout.get("corner", _DEFAULT_CORNER)
         w, h = _DISC_SIZE, _DISC_SIZE
-        if corner.endswith("right"):
+        if _is_center_corner(corner):
+            x = panel.center().x() - w // 2
+        elif corner.endswith("right"):
             x = panel.right() - w + 1
         else:
             x = panel.left()
@@ -638,10 +516,18 @@ class SiriBarWindow(QWidget):
         y = max(scr.top() + 4, min(y, scr.bottom() - h - 4))
 
         if offscreen:
-            if corner.endswith("right"):
+            if _is_center_corner(corner):
+                x = scr.left() + (scr.width() - w) // 2
+                if corner == "top-center":
+                    y = scr.top() - h - 8
+                else:
+                    y = scr.bottom() + 8
+            elif corner.endswith("right"):
                 x = scr.right() + 8
             else:
                 x = scr.left() - w - 8
+        elif _is_center_corner(corner):
+            x = scr.left() + (scr.width() - w) // 2
         elif corner.endswith("right"):
             x = scr.right() - w - mx
         else:
@@ -658,7 +544,11 @@ class SiriBarWindow(QWidget):
         slide_px = max(_SLIDE_IN_PX, int(w * 0.9))
         x = end.x()
         y = end.top()
-        if corner.endswith("right"):
+        if corner == "top-center":
+            y = end.y() - slide_px
+        elif corner == "bottom-center":
+            y = end.y() + slide_px
+        elif corner.endswith("right"):
             x = end.x() + slide_px
         else:
             x = end.x() - slide_px
@@ -670,12 +560,16 @@ class SiriBarWindow(QWidget):
         g = self.geometry()
         scr = self._screen_rect()
         cx, cy = g.center().x(), g.center().y()
-        corner = (
-            ("bottom" if cy > scr.center().y() else "top")
-            + "-"
-            + ("right" if cx > scr.center().x() else "left")
-        )
-        if corner.endswith("right"):
+        scr_cx = scr.center().x()
+        near_center = abs(cx - scr_cx) <= max(80, scr.width() // 8)
+        if near_center:
+            h_edge = "center"
+        else:
+            h_edge = "right" if cx > scr_cx else "left"
+        corner = ("bottom" if cy > scr.center().y() else "top") + "-" + h_edge
+        if _is_center_corner(corner):
+            margin_x = 0
+        elif corner.endswith("right"):
             margin_x = scr.right() - g.right()
         else:
             margin_x = g.left() - scr.left()
@@ -714,7 +608,6 @@ class SiriBarWindow(QWidget):
         self.setMaximumSize(_DISC_SIZE, _DISC_SIZE)
         self.setFixedSize(_DISC_SIZE, _DISC_SIZE)
         self._stack_host.setFixedSize(_DISC_SIZE, _DISC_SIZE)
-        self._panel.setGeometry(0, 0, _DISC_SIZE, _DISC_SIZE)
         self._layout_orb()
         self._update_window_mask()
 
@@ -729,7 +622,7 @@ class SiriBarWindow(QWidget):
         from ui_theme import expanded_shell_stylesheet, panel_card_stylesheet
 
         self._panel_card.setStyleSheet(panel_card_stylesheet())
-        self.setObjectName("ariaExpandedShell")
+        self.setObjectName("neoExpandedShell")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet(expanded_shell_stylesheet())
         if animating:
@@ -780,7 +673,7 @@ class SiriBarWindow(QWidget):
         from ui_theme import expanded_shell_stylesheet
 
         shell = QWidget()
-        shell.setObjectName("ariaExpandedShell")
+        shell.setObjectName("neoExpandedShell")
         shell.setStyleSheet(expanded_shell_stylesheet())
         lay = QVBoxLayout(shell)
         lay.setContentsMargins(12, 10, 12, 10)
@@ -788,7 +681,7 @@ class SiriBarWindow(QWidget):
 
         header = QHBoxLayout()
         header.setContentsMargins(4, 0, 4, 0)
-        title = QLabel("ARIA")
+        title = QLabel("NEO")
         title.setStyleSheet(
             f"color: {C.TEXT}; background: transparent; {ui_font(18, bold=True)}"
         )
@@ -796,7 +689,7 @@ class SiriBarWindow(QWidget):
         header.addStretch()
         dot = QLabel("●")
         dot.setStyleSheet(
-            f"color: {C.LINK}; background: transparent; font-size: 10pt;"
+            f"color: {C.BLUE}; background: transparent; font-size: 10pt;"
         )
         header.addWidget(dot)
         cam_lbl = QLabel("Camera")
@@ -826,7 +719,7 @@ class SiriBarWindow(QWidget):
         """)
         lay.addWidget(self._camera_video, stretch=1)
 
-        self._camera_status_lbl = QLabel("ARIA is looking…")
+        self._camera_status_lbl = QLabel("NEO is looking…")
         self._camera_status_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._camera_status_lbl.setStyleSheet(
             f"color: {C.TEXT_DIM}; background: transparent; {ui_font(10)}"
@@ -992,7 +885,7 @@ class SiriBarWindow(QWidget):
         self.slide_in()
 
     def toggle(self):
-        """Tray click — pop ARIA out, or tuck it away if it's already out.
+        """Tray click — pop NEO out, or tuck it away if it's already out.
 
         Decides on intent (_visible_target / _expanded), never on isVisible(),
         which still reads True mid fade-out and caused the 'click does nothing'
@@ -1078,8 +971,13 @@ class SiriBarWindow(QWidget):
         start = self.geometry()
         # soft exit: a small drift toward the dock edge + a fade to zero
         corner = self._layout.get("corner", _DEFAULT_CORNER)
-        drift = 40 if corner.endswith("right") else -40
-        end = QRect(start.x() + drift, start.y(), start.width(), start.height())
+        if corner == "top-center":
+            end = QRect(start.x(), start.y() - 40, start.width(), start.height())
+        elif corner == "bottom-center":
+            end = QRect(start.x(), start.y() + 40, start.width(), start.height())
+        else:
+            drift = 40 if corner.endswith("right") else -40
+            end = QRect(start.x() + drift, start.y(), start.width(), start.height())
         anim = self._run_geometry_anim(
             start, end, _SLIDE_OUT_MS,
             easing=QEasingCurve.Type.InCubic,
@@ -1180,6 +1078,10 @@ class SiriBarWindow(QWidget):
             self._docked = True
             if self._main_win:
                 self._main_win._style_mute_btn()
+                try:
+                    self._main_win._cmd.line_edit.setFocus()
+                except Exception:
+                    pass
 
         anim.finished.connect(_on_expand_done)
         print(f"[SiriBar] Expanding to {_EXPANDED_W}x{_EXPANDED_H}")
@@ -1201,7 +1103,7 @@ class SiriBarWindow(QWidget):
                 self._body_lay.removeWidget(widget)
         self._camera_video.clear()
         self._camera_video.setText("Starting camera…")
-        self._camera_status_lbl.setText("ARIA is looking…")
+        self._camera_status_lbl.setText("NEO is looking…")
 
     def _detach_body_content(self) -> None:
         if self._panel_kind == "main":
@@ -1341,7 +1243,7 @@ class SiriBarWindow(QWidget):
         if not self._visible_target:
             self.show_compact()
 
-    def update_aria_stream(self, body: str):
+    def update_neo_stream(self, body: str):
         self._hide_timer.stop()
         if not (body or "").strip():
             return
@@ -1350,7 +1252,7 @@ class SiriBarWindow(QWidget):
         self._prompt_locked = False
         self._orb.speaking = True
 
-    def finish_aria_stream(self, body: str, formatted):
+    def finish_neo_stream(self, body: str, formatted):
         if not (body if body else formatted or "").strip():
             return
         self._prompt_locked = False

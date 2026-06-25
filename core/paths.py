@@ -1,4 +1,4 @@
-"""Canonical filesystem paths for ARIA.
+"""Canonical filesystem paths for NEO.
 
 Replaces the ~13 copy-pasted ``_get_base_dir()`` helpers scattered across modules.
 Works the same whether running from source or a frozen (PyInstaller) build, and
