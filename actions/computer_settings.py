@@ -41,7 +41,8 @@ def sleep_display() -> str:
         try:
             import ctypes
             ctypes.windll.user32.SendMessageW(0xFFFF, 0x0112, 0xF170, 2)
-        except: pass
+        except Exception:
+            pass
     elif _OS == "Darwin":
         _run_cmd(["pmset", "displaysleepnow"])
     else:
@@ -53,7 +54,7 @@ def dark_mode() -> str:
         _run_cmd(["osascript", "-e",
             'tell app "System Events" to tell appearance preferences to set dark mode to not dark mode'])
     elif _OS == "Windows":
-        script = """
+        script = r"""
         $p = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize"
         $val = (Get-ItemProperty -Path $p -Name AppsUseLightTheme).AppsUseLightTheme
         $new = if ($val -eq 0) { 1 } else { 0 }

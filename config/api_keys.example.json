@@ -1,23 +1,20 @@
 {
-    "gemini_api_key": "YOUR_GEMINI_KEY_FROM_aistudio.google.com",
     "os_system": "auto",
-    "search_provider": "ddg_first",
-    "prefer_gemini_lite": true,
-    "camera_index": 0,
-    "smart_mode": true,
-    "hybrid_fast_path": true,
     "autonomous_mode": true,
-    "noise_gate": true,
-    "noise_gate_strength": "normal",
     "local_vision": true,
-    "local_vision_offline": false,
     "yolo_enabled": true,
-    "yolo_model": "yolov8n.pt",
-    "yolo_confidence": 0.42,
     "face_recognition_enabled": true,
     "siri_bar": {
-        "corner": "top-right",
-        "margin_x": 14,
+        "corner": "top-center",
+        "margin_x": 0,
         "margin_y": 36
-    }
+    },
+    "noise_gate": true,
+    "noise_gate_strength": "normal",
+    "prefer_gemini_lite": true,
+    "smart_mode": true,
+    "hybrid_fast_path": true,
+    "clap_sensitivity": "strict",
+    "live_voice": "Kore",
+    "_note": "API keys live in .env — copy .env.example to .env and set GEMINI_API_KEY"
 }

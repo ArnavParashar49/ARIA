@@ -57,12 +57,13 @@ class CameraPreviewWindow(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("ARIA Camera")
+        self.setWindowTitle("NEO Camera")
         self.setFixedSize(360, 280)
         self.setWindowFlags(
             Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Window
+            | Qt.WindowType.Tool
             | Qt.WindowType.WindowDoesNotAcceptFocus,
         )
 
@@ -71,7 +72,7 @@ class CameraPreviewWindow(QWidget):
         self._video.setStyleSheet(
             "background: #0a0a12; color: #8af; border-radius: 10px; font-size: 12px;"
         )
-        self._status = QLabel("ARIA is looking…")
+        self._status = QLabel("NEO is looking…")
         self._status.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status.setStyleSheet("color: #ccc; font-size: 11px; padding: 4px;")
 
@@ -235,7 +236,7 @@ class CameraPreviewManager:
             print("[CameraPreview] Embedded preview in panel")
             return
         self._window = CameraPreviewWindow()
-        status = "Live — labels (slow)" if self._yolo_live else "ARIA is looking…"
+        status = "Live — labels (slow)" if self._yolo_live else "NEO is looking…"
         self._window.set_status(status)
         self._window.show()
         print("[CameraPreview] Live preview on")
@@ -289,7 +290,7 @@ class CameraPreviewManager:
             print("[CameraPreview] Embedded preview in panel")
         else:
             self._window = CameraPreviewWindow()
-            status = "Live — labels (slow)" if self._yolo_live else "ARIA is looking…"
+            status = "Live — labels (slow)" if self._yolo_live else "NEO is looking…"
             self._window.set_status(status)
             self._window.show()
             print("[CameraPreview] Live preview on")

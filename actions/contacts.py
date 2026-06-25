@@ -1,4 +1,4 @@
-"""Contacts — saved in ARIA memory + macOS Contacts lookup."""
+"""Contacts — saved in NEO memory + macOS Contacts lookup."""
 
 from __future__ import annotations
 
@@ -157,7 +157,7 @@ def contact_manager(
     if action == "list":
         memories = retrieve_relevant_memory("contact email phone", top_k=20, category="contacts")
         if not memories:
-            return "No contacts saved in ARIA memory yet."
+            return "No contacts saved in NEO memory yet."
         lines = []
         for mem in memories:
             lines.append(f"• {mem.get('content', '')}")

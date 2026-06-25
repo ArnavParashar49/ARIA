@@ -1,4 +1,4 @@
-"""ARIA configuration — loads `.env`, keyring, and legacy config files."""
+"""NEO configuration — loads `.env`, keyring, and legacy config files."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 import keyring
 import platformdirs
 
-APP_NAME = "ARIA"
+APP_NAME = "NEO"
 APP_AUTHOR = "ArnavParashar49"
 
 _LEGACY_CONFIG_PATH = Path(__file__).parent / "api_keys.json"
@@ -61,7 +61,7 @@ def _load_dotenv() -> None:
 _load_dotenv()
 
 DEFAULT_SEARCH_ENGINE = (
-    os.getenv("ARIA_DEFAULT_SEARCH_ENGINE") or "duckduckgo"
+    os.getenv("NEO_DEFAULT_SEARCH_ENGINE") or "duckduckgo"
 ).strip().lower()
 
 SEARCH_ENGINE_BASES: dict[str, str] = {
@@ -89,7 +89,7 @@ def search_engine_url(query: str, engine: str | None = None, *, images: bool = F
 
 def get_default_location() -> str | None:
     """User's default city for weather — .env, then config.json."""
-    env_loc = (os.getenv("ARIA_DEFAULT_LOCATION") or "").strip()
+    env_loc = (os.getenv("NEO_DEFAULT_LOCATION") or "").strip()
     if env_loc:
         return env_loc
     cfg = get_config()

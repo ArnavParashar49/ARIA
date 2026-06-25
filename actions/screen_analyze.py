@@ -1,5 +1,5 @@
 """
-CLI-based Screen Analysis for ARIA.
+CLI-based Screen Analysis for NEO.
 Takes a screenshot using native OS commands and sends it to the vision model.
 """
 
@@ -11,7 +11,7 @@ from PIL import Image
 def _take_screenshot() -> Path | None:
     import platform
     _OS = platform.system()
-    screenshot_path = Path.home() / "Desktop" / f"aria_debug_{int(time.time())}.png"
+    screenshot_path = Path.home() / "Desktop" / f"neo_debug_{int(time.time())}.png"
     
     try:
         if _OS == "Darwin":
@@ -67,14 +67,16 @@ def screen_analyze(
         
     try:
         img = Image.open(path)
-        
+
         if player:
             player.write_log(f"[ScreenAnalyze] Sending to vision model: '{query}'")
-            
+
+        from core.models import VISION
+
         answer = ask(
             prompt=query,
             images=[img],
-            model="gemini/gemini-2.5-flash"  # Flash supports vision natively
+            model=VISION,
         )
         
         # Clean up screenshot

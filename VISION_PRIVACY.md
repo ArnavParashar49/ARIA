@@ -1,4 +1,4 @@
-# ARIA vision & camera privacy
+# NEO vision & camera privacy
 
 ## When the camera is used
 
@@ -21,7 +21,7 @@
 
 ## Safety tips
 
-1. Grant **Camera** permission only to the app you use to run ARIA (Terminal, Cursor, etc.).
+1. Grant **Camera** permission only to the app you use to run NEO (Terminal, Cursor, etc.).
 2. Review saved faces in `memory/face_db/` — delete folders to remove someone.
 3. Do not use face remember on others without their consent.
 4. First run downloads YOLO/DeepFace models from the internet once; after that, labeling and face match work offline.

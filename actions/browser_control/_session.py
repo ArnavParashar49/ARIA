@@ -26,7 +26,7 @@ from playwright.async_api import (
 )
 
 from actions.browser_control._helpers import (
-    _OS, _USE_NATIVE_NAV, _OFFICIAL_APP_URLS, _BAD_RESULT_DOMAINS,
+    _OS, _USE_NATIVE_NAV, _app_download_hint, _BAD_RESULT_DOMAINS,
     _BROWSER_SPECS, _ALIASES,
     _normalize_url, _native_navigate, _user_agent, _real_profile_dir,
     _firefox_profile_dir, _find_opera_windows, _find_exe_windows,
@@ -129,10 +129,10 @@ class _BrowserSession:
             try:
                 self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
             except Exception as e:
-                print(f"[Browser] Firefox real profile failed ({e}), using ARIA profile")
-                aria_profile = str(Path.home() / ".aria_profiles" / "firefox_aria")
-                Path(aria_profile).mkdir(parents=True, exist_ok=True)
-                self._context = await engine_obj.launch_persistent_context(aria_profile, **kwargs)
+                print(f"[Browser] Firefox real profile failed ({e}), using NEO profile")
+                neo_profile = str(Path.home() / ".aria_profiles" / "firefox_neo")
+                Path(neo_profile).mkdir(parents=True, exist_ok=True)
+                self._context = await engine_obj.launch_persistent_context(neo_profile, **kwargs)
 
             await asyncio.sleep(0.5)
             self._page = await self._pick_startup_page()
@@ -155,8 +155,8 @@ class _BrowserSession:
             return
 
         real_profile = _real_profile_dir(self.browser_name)
-        aria_profile = str(Path.home() / ".aria_profiles" / self.browser_name)
-        Path(aria_profile).mkdir(parents=True, exist_ok=True)
+        neo_profile = str(Path.home() / ".aria_profiles" / self.browser_name)
+        Path(neo_profile).mkdir(parents=True, exist_ok=True)
         downloads_path = str(Path.home() / "Downloads")
 
         kwargs = {
@@ -187,9 +187,9 @@ class _BrowserSession:
             + (f" @ {exe}" if exe else "")
         )
 
-        # ARIA profile first — user's Chrome is often already open (profile lock).
-        for profile, tag in ((aria_profile, "ARIA"), (real_profile, "real")):
-            if profile == aria_profile and profile == real_profile:
+        # NEO profile first — user's Chrome is often already open (profile lock).
+        for profile, tag in ((neo_profile, "NEO"), (real_profile, "real")):
+            if profile == neo_profile and profile == real_profile:
                 continue
             try:
                 self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
@@ -285,15 +285,11 @@ class _BrowserSession:
             return _native_navigate(url, self.browser_name)
         return f"Could not open: {url}"
 
-    async def search(self, query: str, engine: str = "google") -> str:
-        _engines = {
-            "google":     "https://www.google.com/search?q=",
-            "bing":       "https://www.bing.com/search?q=",
-            "duckduckgo": "https://duckduckgo.com/?q=",
-            "yandex":     "https://yandex.com/search/?text=",
-        }
-        base = _engines.get(engine.lower(), _engines["google"])
-        target = base + query.replace(" ", "+")
+    async def search(self, query: str, engine: str | None = None) -> str:
+        from config import DEFAULT_SEARCH_ENGINE, search_engine_url
+
+        eng = (engine or DEFAULT_SEARCH_ENGINE).lower()
+        target = search_engine_url(query, eng)
         if _USE_NATIVE_NAV:
             return _native_navigate(target, self.browser_name)
         return await self.go_to(target)
@@ -382,7 +378,7 @@ class _BrowserSession:
             lambda: page.get_by_placeholder(description, exact=False).first.click(timeout=5_000),
             lambda: page.locator(
                 f'[alt*="{description}" i],[title*="{description}" i],'
-                f'[aria-label*="{description}" i]'
+                f'[neo-label*="{description}" i]'
             ).first.click(timeout=5_000),
         ):
             try:
@@ -437,7 +433,7 @@ class _BrowserSession:
     async def screenshot(self, path: str = None) -> str:
         page = await self._get_page()
         try:
-            save_path = path or str(Path.home() / "Desktop" / "aria_screenshot.png")
+            save_path = path or str(Path.home() / "Desktop" / "neo_screenshot.png")
             await page.screenshot(path=save_path, full_page=False)
             return f"Screenshot saved: {save_path}"
         except Exception as e:
@@ -498,14 +494,8 @@ class _BrowserSession:
                 pass
 
     def _official_url_for_app(self, app: str) -> str | None:
-        key = app.lower().strip()
-        if key in _OFFICIAL_APP_URLS:
-            return _OFFICIAL_APP_URLS[key]
-        compact = key.replace(" ", "")
-        for name, url in _OFFICIAL_APP_URLS.items():
-            if compact == name.replace(" ", "") or compact in name.replace(" ", ""):
-                return url
-        return None
+        """Dynamic lookup via _app_download_hint — no hardcoded truth table."""
+        return _app_download_hint(app)
 
     def _score_google_result(self, href: str, title: str, app: str) -> int:
         h = href.lower()

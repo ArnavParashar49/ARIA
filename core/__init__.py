@@ -1,1 +1,1 @@
-"""Shared infrastructure for ARIA (LLM access, paths, logging)."""
+"""Shared infrastructure for NEO (LLM access, paths, logging)."""

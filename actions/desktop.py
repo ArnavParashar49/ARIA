@@ -31,6 +31,7 @@ def _build_sandbox() -> dict:
 
     safe_builtins = {
         "print": print,
+        "__import__": __import__,
         "len": len, "str": str, "int": int, "float": float,
         "bool": bool, "list": list, "dict": dict, "tuple": tuple,
         "range": range, "enumerate": enumerate, "sorted": sorted,
@@ -84,7 +85,7 @@ def _execute_generated_code(code: str, player=None) -> str:
     sandbox["__builtins__"]["print"] = lambda *a: output_lines.append(" ".join(str(x) for x in a))
 
     try:
-        exec(compile(code, "<aria_desktop>", "exec"), sandbox)
+        exec(compile(code, "<neo_desktop>", "exec"), sandbox)
         return "\n".join(output_lines) if output_lines else "Done."
     except Exception as e:
         print(f"[Desktop] Exec error: {e}\nCode:\n{code[:300]}")
@@ -130,7 +131,9 @@ Output ONLY the Python code. No explanation, no markdown, no backticks.
 Task: {task}"""
 
     try:
-        code = ask(prompt, model="gemini-2.5-flash")
+        from core.models import DEEP_ANALYSIS
+
+        code = ask(prompt, model=DEEP_ANALYSIS)
         if code.startswith("```"):
             lines = code.split("\n")
             code  = "\n".join(lines[1:-1]).strip()

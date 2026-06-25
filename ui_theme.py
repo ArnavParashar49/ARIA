@@ -1,51 +1,55 @@
-"""Shared UI colors and helpers."""
+"""Shared UI colors and helpers — sharp dark theme with electric-blue accent."""
 import platform
 
 from PySide6.QtGui import QColor
 
 
 class C:
-    # Core surfaces (aligned with Siri overlay)
-    BG        = "#0e0e10"
-    SURFACE   = "#161618"
-    SURFACE2  = "#1e1e22"
-    PANEL     = "#161618"
-    PANEL2    = "#222226"
-    BORDER    = "rgba(255, 255, 255, 0.08)"
-    BORDER_B  = "rgba(255, 255, 255, 0.14)"
-    BORDER_A  = "rgba(255, 255, 255, 0.06)"
+    # Core surfaces — deep charcoal (reference: #121212)
+    BG        = "#121212"
+    SURFACE   = "#1a1a1a"
+    SURFACE2  = "#242424"
+    PANEL     = "#121212"
+    PANEL2    = "#1e1e1e"
+    BORDER    = "rgba(255, 255, 255, 0.07)"
+    BORDER_B  = "rgba(255, 255, 255, 0.12)"
+    BORDER_A  = "rgba(255, 255, 255, 0.05)"
     # Text
-    PRI       = "#f0f0f2"
-    PRI_DIM   = "#a8a8b0"
-    PRI_GHO   = "#6a6a72"
-    ACC       = "#e8e8ec"
-    ACC2      = "#b8b8c0"
+    PRI       = "#ffffff"
+    PRI_DIM   = "#a1a1aa"
+    PRI_GHO   = "#52525b"
+    ACC       = "#d4d4d8"
+    ACC2      = "#71717a"
     GREEN     = "#6ee7a0"
     GREEN_D   = "#3d9a6a"
     RED       = "#f87171"
-    MUTED_C   = "#888890"
-    TEXT      = "#f0f0f2"
-    TEXT_DIM  = "#a8a8b0"
-    TEXT_MED  = "#7a7a84"
-    WHITE     = "#ffffff"
-    DARK      = "#161618"
-    BAR_BG    = "#1e1e22"
-    # Accents
-    USER      = "#ffffff"
-    AI        = "#d4d4dc"
-    LINK      = "#3fd0c0"
-    # Legacy aliases
-    ACCENT    = LINK
+    MUTED_C   = "#71717a"
+    TEXT      = "#ffffff"
+    TEXT_DIM  = "#a1a1aa"
+    TEXT_MED  = "#71717a"
+    WHITE     = "#fafafa"
+    DARK      = "#121212"
+    BAR_BG    = "#1a1a1a"
+    USER_BUB  = "#2a2a2e"
+    # Accents — electric blue glow
+    BLUE      = "#3b82f6"
+    BLUE_L    = "#60a5fa"
+    BLUE_D    = "#2563eb"
+    BLUE_GLOW = "rgba(59, 130, 246, 0.45)"
+    PURPLE    = "#a855f7"
+    USER      = "#fafafa"
+    AI        = "#f4f4f5"
+    LINK      = "#60a5fa"
+    ACCENT    = BLUE
 
 
-RADIUS_L = 24
+RADIUS_L = 20
 RADIUS_M = 14
 RADIUS_S = 10
 
-# Siri orb disc + expanded panel (same glass look)
-PANEL_GLASS_BG = "rgba(28, 28, 32, 0.60)"
-PANEL_GLASS_BORDER = "rgba(255, 255, 255, 0.30)"
-PANEL_GLASS_INNER = "rgba(22, 22, 26, 0.55)"
+PANEL_GLASS_BG = "rgba(18, 18, 18, 0.92)"
+PANEL_GLASS_BORDER = "rgba(255, 255, 255, 0.08)"
+PANEL_GLASS_INNER = "rgba(18, 18, 18, 0.96)"
 
 _UI_FONT = (
     ".AppleSystemUIFont"
@@ -53,6 +57,7 @@ _UI_FONT = (
     else "Segoe UI"
 )
 _MONO_FONT = "Menlo" if platform.system() == "Darwin" else "Consolas"
+_UI_FONT_FAMILY = _UI_FONT
 
 
 def ui_font(size: int = 13, bold: bool = False) -> str:
@@ -71,10 +76,9 @@ def qcol(h: str, a: int = 255) -> QColor:
 
 
 def expanded_shell_stylesheet() -> str:
-    """Outer window — transparent so the glass card shows through."""
     return """
-        QMainWindow#ariaExpandedShell,
-        QWidget#ariaExpandedShell {
+        QMainWindow#neoExpandedShell,
+        QWidget#neoExpandedShell {
             background: transparent;
         }
         QLabel {
@@ -84,22 +88,21 @@ def expanded_shell_stylesheet() -> str:
 
 
 def panel_card_stylesheet() -> str:
-    """Cozy solid surface for the expanded window — readable on any desktop."""
     return f"""
-        QFrame#ariaPanelCard {{
-            background: #181d1c;
-            border: 1px solid #2c3a38;
+        QFrame#neoPanelCard {{
+            background: {C.BG};
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: {RADIUS_L}px;
         }}
     """
 
 
 def panel_card_compact_stylesheet() -> str:
+    """Compact siri bar — fully transparent; only the orb is visible."""
     return """
-        QFrame#ariaPanelCard {
+        QFrame#neoPanelCard {
             background: transparent;
             border: none;
-            border-radius: 0px;
         }
     """
 
@@ -107,21 +110,21 @@ def panel_card_compact_stylesheet() -> str:
 def log_widget_stylesheet() -> str:
     return f"""
         QTextEdit {{
-            background: {PANEL_GLASS_INNER};
+            background: transparent;
             color: {C.TEXT};
-            border: 1px solid {C.BORDER};
+            border: none;
             border-radius: {RADIUS_M}px;
-            padding: 12px 14px;
-            selection-background-color: #3a3a44;
+            padding: 8px 10px;
+            selection-background-color: rgba(59, 130, 246, 0.35);
         }}
         QScrollBar:vertical {{
             background: transparent;
-            width: 6px;
-            margin: 4px 2px;
+            width: 5px;
+            margin: 4px 1px;
         }}
         QScrollBar::handle:vertical {{
-            background: #3a3a44;
-            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.14);
+            border-radius: 2px;
             min-height: 24px;
         }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
@@ -130,75 +133,141 @@ def log_widget_stylesheet() -> str:
     """
 
 
-def command_input_stylesheet() -> str:
+def command_input_stylesheet(*, focused: bool = False) -> str:
+    border = C.BLUE if focused else "rgba(255, 255, 255, 0.10)"
+    bg = C.SURFACE if not focused else "#1a1a1e"
     return f"""
-        QLineEdit {{
-            background: {PANEL_GLASS_INNER};
+        QTextEdit {{
+            background: {bg};
             color: {C.TEXT};
-            border: 1px solid {C.BORDER};
-            border-radius: {RADIUS_M}px;
-            padding: 8px 14px;
-        }}
-        QLineEdit:focus {{
-            border: 1px solid #22a89c;
-            background: rgba(30, 30, 36, 0.75);
+            border: 2px solid {border};
+            border-radius: 22px;
+            padding: 10px 16px;
         }}
     """
 
 
 def command_input_drag_stylesheet() -> str:
     return f"""
-        QLineEdit {{
-            background: #222228;
+        QTextEdit {{
+            background: {C.SURFACE2};
             color: {C.TEXT};
-            border: 1px solid {C.LINK};
-            border-radius: {RADIUS_M}px;
-            padding: 8px 14px;
+            border: 2px solid {C.BLUE};
+            border-radius: 22px;
+            padding: 10px 16px;
+        }}
+    """
+
+
+def input_container_stylesheet(*, focused: bool = False, dragging: bool = False) -> str:
+    if dragging or focused:
+        border = f"2px solid {C.BLUE}"
+        bg = "#1a1a1e"
+    else:
+        border = "1.5px solid rgba(255, 255, 255, 0.10)"
+        bg = C.SURFACE
+    return f"""
+        QFrame#inputContainer {{
+            background: {bg};
+            border: {border};
+            border-radius: 22px;
+        }}
+    """
+
+
+def pill_toolbar_button_stylesheet(*, active: bool = False) -> str:
+    if active:
+        bg = "rgba(59, 130, 246, 0.12)"
+        border = "rgba(59, 130, 246, 0.35)"
+        color = C.BLUE_L
+    else:
+        bg = C.SURFACE2
+        border = "rgba(255, 255, 255, 0.08)"
+        color = C.TEXT_DIM
+    return f"""
+        QPushButton {{
+            background: {bg};
+            color: {color};
+            border: 1px solid {border};
+            border-radius: 14px;
+            padding: 5px 12px;
+            {ui_font(10)}
+        }}
+        QPushButton:hover {{
+            background: rgba(255, 255, 255, 0.06);
+            color: {C.TEXT};
+            border: 1px solid rgba(255, 255, 255, 0.14);
+        }}
+    """
+
+
+def header_icon_button_stylesheet() -> str:
+    return f"""
+        QPushButton {{
+            background: transparent;
+            color: {C.TEXT_MED};
+            border: none;
+            border-radius: 8px;
+            padding: 4px 6px;
+            min-width: 28px;
+            min-height: 28px;
+            {ui_font(12)}
+        }}
+        QPushButton:hover {{
+            background: rgba(255, 255, 255, 0.06);
+            color: {C.TEXT};
+        }}
+    """
+
+
+def ghost_action_button_stylesheet() -> str:
+    return f"""
+        QPushButton {{
+            background: transparent;
+            color: {C.TEXT_DIM};
+            border: 1px solid rgba(255, 255, 255, 0.10);
+            border-radius: 12px;
+            padding: 4px 10px;
+            {ui_font(9)}
+        }}
+        QPushButton:hover {{
+            background: rgba(255, 255, 255, 0.05);
+            color: {C.TEXT};
+            border: 1px solid rgba(255, 255, 255, 0.16);
         }}
     """
 
 
 def icon_button_stylesheet() -> str:
-    return f"""
-        QPushButton {{
-            background: {C.SURFACE2};
-            color: {C.TEXT_DIM};
-            border: 1px solid {C.BORDER};
-            border-radius: {RADIUS_M}px;
-            padding: 6px 12px;
-            {ui_font(11)}
-        }}
-        QPushButton:hover {{
-            background: #2a2a30;
-            color: {C.TEXT};
-            border-color: {C.BORDER_B};
-        }}
-    """
+    return header_icon_button_stylesheet()
 
 
 def primary_button_stylesheet() -> str:
     return f"""
         QPushButton {{
-            background: #22a89c;
-            color: #07201c;
+            background: {C.BLUE};
+            color: #ffffff;
             border: none;
-            border-radius: {RADIUS_M}px;
+            border-radius: 18px;
             {ui_font(12, bold=True)}
         }}
-        QPushButton:hover {{ background: #6fe3d6; }}
-        QPushButton:pressed {{ background: #178a80; color: #07201c; }}
+        QPushButton:hover {{ background: {C.BLUE_L}; }}
+        QPushButton:pressed {{ background: {C.BLUE_D}; }}
     """
 
 
 def progress_bar_stylesheet() -> str:
     return f"""
         QProgressBar {{
-            background: {C.SURFACE};
+            background: rgba(255, 255, 255, 0.06);
             border: none;
             border-radius: 2px;
         }}
         QProgressBar::chunk {{
-            background: {C.LINK};
+            background: qlineargradient(
+                x1:0, y1:0, x2:1, y2:0,
+                stop:0 {C.BLUE}, stop:1 {C.BLUE_L}
+            );
             border-radius: 2px;
         }}
     """
@@ -208,7 +277,7 @@ def embed_panel_stylesheet() -> str:
     return f"""
         QLabel {{
             background: {C.SURFACE2};
-            border: 1px solid {C.BORDER};
+            border: 1px solid rgba(255, 255, 255, 0.08);
             border-radius: {RADIUS_M}px;
             color: {C.TEXT_DIM};
         }}

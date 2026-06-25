@@ -1,4 +1,4 @@
-"""ARIA's desktop buddy — a little pixel robot with a green CRT-screen face.
+"""NEO's desktop buddy — a little pixel robot with a green CRT-screen face.
 
 The face (eyes + mouth) is drawn on the screen, so expressions animate like a
 real digital display: blink, talk, happy. Drop-in for the orb — same interface

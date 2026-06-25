@@ -1,10 +1,17 @@
+import config  # noqa: F401 — load .env before other modules
+
 import asyncio
 import random
 import re
 import socket
 import threading
 import json
+import os
 import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8')
 import time
 import traceback
 from enum import Enum, auto
@@ -14,7 +21,7 @@ import numpy as np
 import sounddevice as sd
 from google import genai
 from google.genai import types
-from ui import AriaUI
+from ui import NeoUI
 
 from actions.file_processor import file_processor
 from actions.flight_finder     import flight_finder
@@ -35,9 +42,6 @@ from actions.youtube_video     import youtube_video
 from actions.desktop           import desktop_control
 from actions.browser_control   import browser_control
 from actions.file_controller   import file_controller
-from actions.code_helper       import code_helper
-from actions.dev_agent         import dev_agent
-from actions.project_builder   import project_builder
 from actions.web_search        import web_search as web_search_action
 from actions.computer_control  import computer_control
 from wake_listener             import WakeListener
@@ -52,7 +56,9 @@ def get_base_dir():
 
 BASE_DIR        = get_base_dir()
 PROMPT_PATH     = BASE_DIR / "core" / "prompt.txt"
-LIVE_MODEL          = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+from core.models import VOICE_LIVE
+
+LIVE_MODEL          = VOICE_LIVE
 CHANNELS            = 1
 SEND_SAMPLE_RATE    = 16000
 RECEIVE_SAMPLE_RATE = 24000
@@ -70,8 +76,9 @@ _SLOW_ACK_RE        = re.compile(
     re.IGNORECASE,
 )
 _SHOW_IMAGES_RE     = re.compile(
-    r"\b(show|see|display|view|get|dikh|dikha|dikhao)\b.*\b(image|images|photo|picture|pics|imaje|imaj)\b|"
-    r"\b(image|images|photo|picture|pics|imaje|imaj)\b.*\b(show|see|here|grid|squares?|dikh)\b|"
+    r"\b(show|see|display|view|get|dikh|dikha|dikhao|find)\b.*\b(image|images|photo|picture|pics|imaje|imaj|cover|covers|case|cases|option|options)\b|"
+    r"\b(image|images|photo|picture|pics|imaje|imaj|cover|covers|case|cases)\b.*\b(show|see|here|grid|squares?|dikh)\b|"
+    r"\b(show|see|find)\b.*\b(back\s+cover|phone\s+case|product|products|laptop|phone|options)\b|"
     r"not\s+see(?:ing)?\s+(?:the\s+)?\w*\s*imag|"
     r"can't\s+see\s+(?:the\s+)?\w*\s*imag|"
     r"इमेज|दिख|तस्वीर|फोटो",
@@ -169,15 +176,26 @@ def _resample_pcm16(data: bytes, from_rate: int, to_rate: int) -> bytes:
     return out.astype(np.int16).tobytes()
 
 
+def _fallback_input_device() -> int | None:
+    """Pick first available input when Windows default device is -1."""
+    try:
+        for i, dev in enumerate(sd.query_devices()):
+            if int(dev.get("max_input_channels", 0)) > 0:
+                print(f"[NEO] Mic fallback device {i}: {dev.get('name', '?')}")
+                return i
+    except Exception:
+        pass
+    return None
+
+
 def _default_audio_devices() -> tuple[int | None, int | None]:
     try:
         inp, out = sd.default.device
-        return (
-            int(inp) if inp is not None and int(inp) >= 0 else None,
-            int(out) if out is not None and int(out) >= 0 else None,
-        )
+        in_dev = int(inp) if inp is not None and int(inp) >= 0 else _fallback_input_device()
+        out_dev = int(out) if out is not None and int(out) >= 0 else None
+        return in_dev, out_dev
     except Exception:
-        return None, None
+        return _fallback_input_device(), None
 
 
 def _open_playback_stream() -> tuple[sd.RawOutputStream, int]:
@@ -209,9 +227,9 @@ def _open_playback_stream() -> tuple[sd.RawOutputStream, int]:
                 stream = sd.RawOutputStream(**kwargs)
                 stream.start()
                 if rate != RECEIVE_SAMPLE_RATE:
-                    print(f"[ARIA] 🔊 Playback at {rate} Hz (resampled from {RECEIVE_SAMPLE_RATE})")
+                    print(f"[NEO] 🔊 Playback at {rate} Hz (resampled from {RECEIVE_SAMPLE_RATE})")
                 else:
-                    print(f"[ARIA] 🔊 Playback at {rate} Hz")
+                    print(f"[NEO] 🔊 Playback at {rate} Hz")
                 return stream, rate
             except Exception as e:
                 errors.append(f"{rate}Hz dev={dev}: {e}")
@@ -245,7 +263,7 @@ def _play_pcm_blocking(pcm: bytes, sample_rate: int = RECEIVE_SAMPLE_RATE, on_ch
 
 
 def _synthesize_charon_greeting(api_key: str, text: str) -> bytes | None:
-    """Fallback TTS — same Charon voice as live ARIA."""
+    """Fallback TTS — same Charon voice as live NEO."""
     models = (WAKE_TTS_MODEL, "gemini-2.5-pro-preview-tts")
     prompt = (
         "Speak like a witty, warm friend — natural pace, lightly playful, never stiff. "
@@ -271,10 +289,10 @@ def _synthesize_charon_greeting(api_key: str, text: str) -> bytes | None:
             for part in response.candidates[0].content.parts:
                 blob = part.inline_data
                 if blob and blob.data:
-                    print(f"[ARIA] Wake TTS OK ({model})")
+                    print(f"[NEO] Wake TTS OK ({model})")
                     return blob.data
         except Exception as e:
-            print(f"[ARIA] Wake TTS ({model}): {e}")
+            print(f"[NEO] Wake TTS ({model}): {e}")
     return None
 
 
@@ -337,19 +355,6 @@ def _tool_filler_phrase(name: str, args: dict) -> str:
         if city:
             return f"Checking {city}'s weather — hold the small talk with the clouds."
         return "Let me check the weather — one sec."
-    if name == "project_builder":
-        act = (args.get("action") or "start").lower()
-        desc = (args.get("description") or "").strip()
-        if act == "build":
-            return "Opening the editor and kicking off the AI build — this'll be fun."
-        if act == "answer":
-            return "Got it — sharpening the build plan."
-        if desc:
-            return f"Love it — researching {desc[:60]} now."
-        return "On it — researching your project idea."
-    if name == "dev_agent":
-        d = (args.get("description") or "your project")[:50]
-        return f"Building {d} — fingers crossed for clean compile."
     if name == "agent_task":
         g = (args.get("goal") or "that")[:50]
         return f"On it — tackling {g}."
@@ -390,10 +395,10 @@ def _api_key_config_error() -> str | None:
     """Return a user-facing message when the Gemini key is missing or a placeholder."""
     key = _get_api_key().strip()
     if not key:
-        return "gemini_api_key is empty in the settings."
+        return "gemini_api_key is empty — set GEMINI_API_KEY in .env (see .env.example)."
     lowered = key.lower()
     if lowered in {"your-api-key", "your_api_key", "paste-key-here"} or "your" in lowered and "key" in lowered:
-        return "Replace the placeholder gemini_api_key."
+        return "Replace the placeholder GEMINI_API_KEY in .env."
     return None
 
 
@@ -429,14 +434,20 @@ def _classify_connect_error(exc: BaseException) -> str:
         return "auth"
     if "cancelled" in s or "portaudio" in s:
         return "cancelled"
-    if any(tok in s for tok in ("1006", "keepalive", "connectionclosed", "connection reset", "closed")):
+    if any(
+        tok in s
+        for tok in (
+            "1006", "1011", "keepalive", "connectionclosed",
+            "connection reset", "closed", "internal error",
+        )
+    ):
         return "transient"
     return "unknown"
 
 
 def _connect_error_message(kind: str, exc: BaseException | None = None) -> str:
     if kind == "network":
-        return "No internet — can't reach Gemini. Check Wi‑Fi or DNS, then ARIA will retry."
+        return "No internet — can't reach Gemini. Check Wi‑Fi or DNS, then NEO will retry."
     if kind == "auth":
         return (
             "Gemini rejected the API key. Please update it."
@@ -492,7 +503,7 @@ def _load_system_prompt() -> str:
         return PROMPT_PATH.read_text(encoding="utf-8")
     except Exception:
         return (
-            "You are ARIA, personal AI assistant. "
+            "You are NEO, personal AI assistant. "
             "Be concise, direct, and always use the provided tools to complete tasks. "
             "Never simulate or guess results — always call the appropriate tool."
         )
@@ -520,23 +531,24 @@ def _merge_transcript(parts: list[str], new: str) -> list[str]:
     return parts + [new]
 
 from hybrid.bootstrap import init_hybrid_system
-from hybrid.declarations import TOOL_DECLARATIONS
 
 _HYBRID_ORCHESTRATOR = init_hybrid_system()
 _SLOW_TOOLS = _HYBRID_ORCHESTRATOR.registry.slow_tools()
+# Auto-generated from registry — no hand-maintained declarations file needed
+CORE_TOOL_DECLARATIONS = _HYBRID_ORCHESTRATOR.registry.to_gemini_declarations()
 
 
 class MicPhase(Enum):
     STANDBY        = auto()   # muted — wake / clap only
-    WAKE_SPEAKING  = auto()   # muted — ARIA says greeting
+    WAKE_SPEAKING  = auto()   # muted — NEO says greeting
     USER_SPEAKING  = auto()   # mic open — user talks
-    AI_RESPONDING  = auto()   # muted — ARIA thinking / speaking / tools
-    FOLLOWUP       = auto()   # mic open — 5 s window after ARIA reply
+    AI_RESPONDING  = auto()   # muted — NEO thinking / speaking / tools
+    FOLLOWUP       = auto()   # mic open — 5 s window after NEO reply
 
 
-class AriaLive:
+class NeoLive:
 
-    def __init__(self, ui: AriaUI):
+    def __init__(self, ui: NeoUI):
         self.ui             = ui
         self.session        = None
         self.audio_in_queue = None
@@ -560,12 +572,12 @@ class AriaLive:
         self._followup_voice_engaged = False
         self._voice_activity_frames  = 0
         self._processing            = False
-        self._last_aria_reply       = ""
+        self._last_neo_reply       = ""
         self._last_search_result    = ""
         self._last_system_command   = ""
         self._system_handled_turn   = False
         self._local_system_lock     = threading.Lock()
-        self._aria_streaming        = False
+        self._neo_streaming        = False
         self._turn_finalize_pending = False
         self._out_buf_lock          = threading.Lock()
         self._live_out_buf: list[str] = []
@@ -592,7 +604,7 @@ class AriaLive:
             NoiseGate(_noise_gate_strength()) if _noise_gate_enabled() else None
         )
         if self._noise_gate:
-            print(f"[ARIA] 🔇 Noise gate on ({_noise_gate_strength()})")
+            print(f"[NEO] 🔇 Noise gate on ({_noise_gate_strength()})")
         self._wake_listener = (
             WakeListener(SEND_SAMPLE_RATE, clap_sensitivity=_clap_sensitivity())
             if self._smart_mode else None
@@ -668,20 +680,20 @@ class AriaLive:
         self._listen_deadline = 0.0
         self._followup_deadline = 0.0
         self._turn_finalize_pending = False
-        self._aria_streaming = False
+        self._neo_streaming = False
         with self._speaking_lock:
             self._is_speaking = False
         self.ui.set_speaking_active(False)
         self._wake_listen_blocked_until = time.time() + 0.25
         self._set_phase(MicPhase.STANDBY)
         self.ui.siri_hide_now()
-        print("[ARIA] Standby — say 'Hey Aria' or clap twice.")
+        print("[NEO] Standby — say 'Hey Neo' or clap twice.")
 
     def _reset_live_session_state(self) -> None:
         """Clear stuck flags after a dropped live session so wake + orb recover."""
         self._processing = False
         self._finish_processing()
-        self._aria_streaming = False
+        self._neo_streaming = False
         self._turn_finalize_pending = False
         self._ack_spoken_this_turn = False
         self._wake_listen_blocked_until = 0.0
@@ -698,6 +710,12 @@ class AriaLive:
                 except asyncio.QueueEmpty:
                     break
         self._drain_out_queue()
+        try:
+            from core.conversation_compactor import reset_compactor
+
+            reset_compactor()
+        except Exception:
+            pass
 
     def _drain_out_queue(self):
         if not self.out_queue:
@@ -720,7 +738,7 @@ class AriaLive:
     def _try_begin_offline_speech(self) -> bool:
         """Only one spoken output at a time (wake TTS). Blocks live model audio."""
         if not self._speech_exclusive.acquire(blocking=False):
-            print("[ARIA] Speech skipped — already talking.")
+            print("[NEO] Speech skipped — already talking.")
             return False
         self._offline_tts_active = True
         self._suppress_live_audio_until = time.time() + 90.0
@@ -783,7 +801,7 @@ class AriaLive:
         self._finish_processing()
         self._cancel_think_filler()
         self._turn_finalize_pending = False
-        self._aria_streaming = False
+        self._neo_streaming = False
         self._user_spoke_this_turn = False
         self._followup_voice_engaged = False
         self._followup_voice_frames = 0
@@ -797,7 +815,9 @@ class AriaLive:
         self.ui.set_speaking_active(False)
         self._drain_out_queue()
         self._drain_incoming_audio()
-
+        # BARGE-IN: If NEO is speaking via offline TTS, unlock it
+        if self._offline_tts_active:
+            self._end_offline_speech()
         with self._phase_lock:
             self._mic_phase = MicPhase.STANDBY
 
@@ -824,19 +844,14 @@ class AriaLive:
         now = time.time()
         if now < self._wake_block_until:
             return
-        if self._speech_exclusive.locked() or self._offline_tts_active:
-            return
-
-        phase = self._get_phase()
-        if phase not in (MicPhase.STANDBY, MicPhase.USER_SPEAKING, MicPhase.FOLLOWUP):
-            return
+        # Barge-in: we removed speech exclusive lock check so user can interrupt
 
         self._wake_block_until = max(self._wake_block_until, now + 0.6)
         self._wake_listen_blocked_until = now + 0.15
         self._clear_orb_hide_deadline()
 
         if self._had_conversation:
-            print(f"[ARIA] Resume ({source})")
+            print(f"[NEO] Resume ({source})")
             self._ack_spoken_this_turn = False
             self._user_line_logged = False
             self._followup_voice_engaged = True
@@ -847,7 +862,7 @@ class AriaLive:
             self._flush_wake_prebuffer()
             return
 
-        print(f"[ARIA] Wake ({source})")
+        print(f"[NEO] Wake ({source})")
         self.ui.siri_wake()
         self._followup_voice_engaged = True
         self._followup_voice_frames = 0
@@ -864,8 +879,8 @@ class AriaLive:
         self._flush_wake_prebuffer()
 
     def _force_listen(self):
-        """Recover mic when user taps the button while ARIA is processing."""
-        print("[ARIA] Force listen — reopening mic")
+        """Recover mic when user taps the button while NEO is processing."""
+        print("[NEO] Force listen — reopening mic")
         self._finish_processing()
         with self._speaking_lock:
             self._is_speaking = False
@@ -897,9 +912,7 @@ class AriaLive:
             "flight_finder": 20,
             "file_processor": 15,
             "agent_task": 25,
-            "dev_agent": 20,
-            "project_builder": 25,
-            "weather_report": 12,
+            "weather_report": 4,
         }.get(name, 12)
 
     def _start_processing_keepalive(self):
@@ -911,7 +924,7 @@ class AriaLive:
                     break
                 # UI only — no repeated log lines or spoken duplicates
 
-        threading.Thread(target=loop, daemon=True, name="ARIA-keepalive").start()
+        threading.Thread(target=loop, daemon=True, name="NEO-keepalive").start()
 
     def _stop_processing_keepalive(self):
         self._processing_keepalive_stop.set()
@@ -919,7 +932,7 @@ class AriaLive:
     def _show_status_text(self, text: str):
         """Bar text only — no second voice (live model speaks when needed)."""
         if text and text.strip():
-            self.ui.write_log_siri_compact(f"Aria: {text.strip()[:280]}")
+            self.ui.write_log_siri_compact(f"Neo: {text.strip()[:280]}")
 
     def _announce_tool_start(self, name: str, args: dict):
         line = _tool_status_line(name, args)
@@ -938,7 +951,7 @@ class AriaLive:
                 self._show_status_text(body[:180])
 
     def _enter_processing(self, eta_sec: int = 15, label: str = ""):
-        """Mute mic and show progress while ARIA works."""
+        """Mute mic and show progress while NEO works."""
         self.ui.siri_cancel_hide()
         self._processing = True
         now = time.time()
@@ -952,25 +965,18 @@ class AriaLive:
         self._start_processing_keepalive()
 
     def _trigger_product_images(self, query: str):
-        from actions.visual_feed import extract_shopping_queries, is_product_context
-
-        summary = self._last_search_result or self._last_aria_reply
-        if not summary:
+        summary = self._last_search_result or self._last_neo_reply
+        if not summary and not query:
             return
 
-        if is_product_context(summary, query):
-            named = extract_shopping_queries(summary, query, 8)
-            if named:
-                summary = "\n".join(named) + "\n" + summary
-
-        print(f"[ARIA] 🖼 Visual grid: {query!r}")
+        print(f"[NEO] 🖼 Opening images: {query!r}")
         if not self._ack_spoken_this_turn:
             self._enter_processing(25)
-            self.ui.write_log("Aria: One moment.")
+            self.ui.write_log("Neo: One moment.")
         else:
             self._enter_processing(25)
         self.ui.show_visuals(
-            summary,
+            summary or "",
             query,
             on_done=self._finish_processing,
         )
@@ -978,7 +984,7 @@ class AriaLive:
     def _maybe_auto_show_images(self, text: str):
         if not _SHOW_IMAGES_RE.search(text):
             return
-        summary = self._last_search_result or self._last_aria_reply
+        summary = self._last_search_result or self._last_neo_reply
         if not summary:
             return
         threading.Thread(
@@ -1011,7 +1017,7 @@ class AriaLive:
             self._ack_spoken_this_turn = True
             self.ui.write_activity(phrase)
 
-        threading.Thread(target=run, daemon=True, name="ARIA-think").start()
+        threading.Thread(target=run, daemon=True, name="NEO-think").start()
 
     def _fast_path_duplicate_result(self, tool_name: str, args: dict) -> str | None:
         """If fast path already ran this tool+args recently, return cached result."""
@@ -1045,9 +1051,63 @@ class AriaLive:
             return result.split(".")[0][:80] if result else "Done."
         return (result or "Done.").split("\n")[0][:100]
 
+    def _wrap_user_turn(self, text: str) -> str:
+        """Augment user text with action context and relevant memories."""
+        prefix = ""
+        try:
+            from core.action_context import format_for_prompt
+
+            ctx = format_for_prompt()
+            if ctx:
+                prefix += ctx
+        except Exception:
+            pass
+
+        if text and len(text) > 5:
+            try:
+                from core.memory_rag import format_memory_for_prompt
+
+                mem_block = format_memory_for_prompt(text, top_k=5)
+                if mem_block:
+                    prefix += "\n" + mem_block
+            except Exception:
+                pass
+
+        return f"{prefix}{text}" if prefix else text
+
+    def _try_open_context_link(self, text: str, source: str) -> bool:
+        try:
+            from core.action_context import resolve_link, open_message
+            from actions.browser_control import browser_control
+        except Exception:
+            return False
+
+        url = resolve_link(text)
+        if not url:
+            return False
+
+        if not self._user_line_logged:
+            self._log_user_line(text)
+        self._enter_processing(10, "Opening link…")
+        try:
+            browser_control({"action": "go_to", "url": url})
+            msg = open_message(url)
+        except Exception as e:
+            msg = f"Could not open the link: {e}"
+        self.ui.write_log(f"Neo: {msg}")
+        self._set_phase(MicPhase.AI_RESPONDING)
+        self._ack_spoken_this_turn = True
+        self._finish_processing()
+        print(f"[NEO] Context link opened ({source}): {url[:80]}")
+        return True
+
     def _try_consume_fast_path(self, text: str, source: str) -> bool:
         """Run tool locally without sending the user message to Gemini Live."""
-        if not _hybrid_fast_path_enabled() or not text.strip():
+        if not text.strip():
+            return False
+        if self._try_open_context_link(text, source):
+            return True
+        if not _hybrid_fast_path_enabled():
             return False
         if self._run_local_system_control(text, notify_model=False):
             return True
@@ -1065,47 +1125,57 @@ class AriaLive:
         self._register_fast_path(tool_name, tool_args, fast.text)
         if not self._user_line_logged:
             self._log_user_line(text)
-        self.ui.write_log(f"Aria: {fast.text}")
+        self.ui.write_log(f"Neo: {fast.text}")
         self._set_phase(MicPhase.AI_RESPONDING)
         self._ack_spoken_this_turn = True
         self._cancel_think_filler()
-        confirm = self._fast_path_confirmation(tool_name, tool_args, fast.text)
-        self._speak_filler_async(confirm)
-        print(f"[ARIA] Fast path complete ({source}) — Gemini tool calls skipped for this command")
+        # TTS filler disabled — Gemini Live handles response natively
+        # confirm = self._fast_path_confirmation(tool_name, tool_args, fast.text)
+        print(f"[NEO] Fast path complete ({source}) — Gemini tool calls skipped for this command")
         return True
 
-    def _speak_filler_async(self, text: str):
-        text = (text or "").strip()
-        if not text:
-            return
-        self._cancel_think_filler()
-        print(f"[ARIA] 💬 Filler: {text}")
 
-        def run():
-            if not self._try_begin_offline_speech():
-                return
-            try:
-                pcm = _synthesize_charon_speech(_get_api_key(), text)
-                if not pcm:
-                    return
-                self.set_speaking(True)
-                _play_pcm_blocking(
-                    pcm,
-                    on_chunk=lambda c: self.ui.push_audio_levels(_pcm_to_bands(c)),
-                )
-            finally:
-                self.set_speaking(False)
-                self._end_offline_speech()
+    def _try_goal_dispatcher(self, text: str) -> bool:
+        """Catch multi-task input and dispatch in parallel BEFORE Gemini.
 
-        threading.Thread(target=run, daemon=True, name="ARIA-filler").start()
+        Splits requests like 'check email AND tell me the weather AND open Chrome'
+        into independent goals and runs them in parallel, bypassing the live session.
+        """
+        try:
+            from core.goal_dispatcher import split_goals
+        except ImportError:
+            return False
+        goals = split_goals(text)
+        if len(goals) < 2:
+            return False
+        print(f"[NEO] 🎯 GoalDispatcher: detected {len(goals)} goals")
+        try:
+            from core.goal_dispatcher import get_dispatcher
+            from hybrid.types import ExecutionContext
+            ctx = ExecutionContext(
+                ui=self.ui,
+                speak=getattr(self, "notify_user", getattr(self, "speak", None)),
+            )
+            result = get_dispatcher().dispatch(text, ctx)
+            if not self._user_line_logged:
+                self._log_user_line(text)
+            self._set_phase(MicPhase.AI_RESPONDING)
+            self._ack_spoken_this_turn = True
+            self.ui.write_log(f"Neo: {result.summary[:500]}")
+            print(f"[NEO] ✅ GoalDispatcher: {len(result.results)} goals completed")
+            return True
+        except Exception as exc:
+            print(f"[NEO] ⚠️ GoalDispatcher failed: {exc}")
+            return False
 
-    def _speak_tool_filler(self, name: str, args: dict):
+    def _speak_tool_filler(self, name: str, args: dict | None = None):
         if self._ack_spoken_this_turn:
             return
         phrase = _tool_filler_phrase(name, args)
         if phrase:
             self._ack_spoken_this_turn = True
-            self._speak_filler_async(phrase)
+            # TTS filler disabled — Gemini Live WebSocket handles response natively
+            # self._speak_filler_async(phrase)
 
     def _finish_processing(self, *, schedule_hide: bool = True):
         self._processing = False
@@ -1152,8 +1222,8 @@ class AriaLive:
             self._followup_voice_engaged = True
             self._user_spoke_this_turn = True
 
-    def _mark_aria_reply_started(self) -> None:
-        """Pause silence timeout while ARIA is speaking."""
+    def _mark_neo_reply_started(self) -> None:
+        """Pause silence timeout while NEO is speaking."""
         self._cancel_think_filler()
         phase = self._get_phase()
         if phase in (MicPhase.USER_SPEAKING, MicPhase.FOLLOWUP):
@@ -1220,7 +1290,7 @@ class AriaLive:
 
         if phase == MicPhase.FOLLOWUP:
             if word_count < _MIN_USER_WORDS or not self._followup_voice_engaged:
-                print("[ARIA] Ignoring empty follow-up turn (phantom audio).")
+                print("[NEO] Ignoring empty follow-up turn (phantom audio).")
                 return
 
         if phase == MicPhase.USER_SPEAKING and (user_text or self._user_spoke_this_turn):
@@ -1252,10 +1322,10 @@ class AriaLive:
             )
         )
         if phantom:
-            print("[ARIA] Ignoring phantom turn (no real user speech).")
+            print("[NEO] Ignoring phantom turn (no real user speech).")
             self._live_out_buf = []
             self._live_in_buf = []
-            self._aria_streaming = False
+            self._neo_streaming = False
             self._user_spoke_this_turn = False
             self._followup_voice_engaged = False
             self._drain_incoming_audio()
@@ -1276,24 +1346,56 @@ class AriaLive:
         phase = self._get_phase()
         if full_out and phase not in (MicPhase.WAKE_SPEAKING,):
             if not _is_ack_only(full_out):
-                self._last_aria_reply = full_out
+                self._last_neo_reply = full_out
             if not system_handled:
-                if self._aria_streaming:
-                    self.ui.finish_aria_stream(full_out)
+                if self._neo_streaming:
+                    self.ui.finish_neo_stream(full_out)
                 elif not _is_ack_only(full_out):
-                    self.ui.write_log(f"Aria: {full_out}")
-            elif self._aria_streaming and full_out:
-                self.ui.finish_aria_stream(full_out)
+                    self.ui.write_log(f"Neo: {full_out}")
+            elif self._neo_streaming and full_out:
+                self.ui.finish_neo_stream(full_out)
             self._processing = False
 
         self._handle_turn_complete(full_in, full_out)
+
+        # ── Intelligence loop: observe, compact, suggest ──
+        if full_in and full_out and not phantom and not system_handled:
+            self._run_memory_intelligence(full_in, full_out)
+            try:
+                from core.memory_suggestions import get_suggestion
+
+                suggestion = get_suggestion()
+                if suggestion:
+                    self.ui.write_log(f"Neo: 💡 {suggestion}")
+            except Exception:
+                pass
+
         self._user_line_logged = False
         self._ack_spoken_this_turn = False
-        self._aria_streaming = False
+        self._neo_streaming = False
         self._system_handled_turn = False
 
+    def _run_memory_intelligence(self, user_text: str, neo_response: str) -> None:
+        """Background intelligence: observe facts, compact conversation."""
+        try:
+            from core.memory_observer import observe_turn
+
+            observe_turn(user_text, neo_response)
+        except Exception:
+            pass
+
+        try:
+            from core.conversation_compactor import get_compactor
+
+            compactor = get_compactor()
+            compactor.record_turn(user_text, neo_response)
+            if compactor.should_summarize():
+                compactor.summarize(blocking=False)
+        except Exception:
+            pass
+
     def _try_begin_followup(self):
-        """After ARIA finishes speaking, keep mic open briefly for a reply."""
+        """After NEO finishes speaking, keep mic open briefly for a reply."""
         phase = self._get_phase()
         if phase not in (MicPhase.AI_RESPONDING, MicPhase.USER_SPEAKING) or self._processing:
             return
@@ -1327,14 +1429,14 @@ class AriaLive:
                 p in user_text.lower()
                 for p in ("more", "again", "even", "further", "keep")
             ) else 1
-            print(f"[ARIA] 🔊 Local system_control: {cmd!r} ← {user_text!r} (steps={steps})")
+            print(f"[NEO] 🔊 Local system_control: {cmd!r} ← {user_text!r} (steps={steps})")
             result = system_control(
                 {"command": cmd, "steps": steps, "last_command": last or ""}
             )
             self._last_system_command = cmd
             self._system_handled_turn = True
 
-        self.ui.write_log(f"Aria: {result}")
+        self.ui.write_log(f"Neo: {result}")
         self._set_phase(MicPhase.AI_RESPONDING)
 
         if notify_model and self._loop and self.session:
@@ -1373,6 +1475,8 @@ class AriaLive:
             if len(text.split()) >= min_words:
                 if self._try_consume_fast_path(text, "voice"):
                     return
+                if self._try_goal_dispatcher(text):
+                    return
                 self._log_user_line(text)
                 if self._needs_immediate_ack(text):
                     self._speak_quick_ack(text)
@@ -1391,6 +1495,8 @@ class AriaLive:
             return
         if self._try_consume_fast_path(text, "typed"):
             return
+        if self._try_goal_dispatcher(text):
+            return
         if self._smart_mode and self._get_phase() == MicPhase.STANDBY:
             # Typed command — do not open the live mic or show "listening"
             self.ui.siri_wake()
@@ -1400,7 +1506,7 @@ class AriaLive:
             self.ui.set_mic_live(self._mic_live)
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
-                turns={"parts": [{"text": text}]},
+                turns={"parts": [{"text": self._wrap_user_turn(text)}]},
                 turn_complete=True
             ),
             self._loop
@@ -1430,13 +1536,22 @@ class AriaLive:
             self._loop
         )
 
+    def notify_user(self, text: str, interrupt: bool = False):
+        """Used by orchestrator and background tasks to push updates to the UI chat log."""
+        if hasattr(self, "ui") and self.ui:
+            self.ui.write_log(f"NEO: {text}")
+        if not self._mic_live:
+            # Optionally speak offline if the user isn't talking
+            self.speak(text)
+
     def speak_error(self, tool_name: str, error: str):
         short = str(error)[:120]
-        print(f"[ARIA] ERR: {tool_name} — {short}")
+        print(f"[NEO] ERR: {tool_name} — {short}")
         self._show_status_text(f"{tool_name} had an error. {short}")
 
     def _build_config(self) -> types.LiveConnectConfig:
         from datetime import datetime
+        from core import paths
 
         sys_prompt = _load_system_prompt()
 
@@ -1450,13 +1565,113 @@ class AriaLive:
 
         parts = [time_ctx]
         parts.append(sys_prompt)
+        
+        # Inject recent conversation history
+        try:
+            mem_dir = paths.base_dir() / "memory"
+            hist_file = mem_dir / "conversation_history.txt"
+            if hist_file.exists():
+                lines = hist_file.read_text(encoding="utf-8").strip().split('\n')
+                if lines:
+                    history_str = "[RECENT CONVERSATION HISTORY]\n"
+                    for line in lines[-20:]: # Inject last 20 messages
+                        try:
+                            msg = json.loads(line)
+                            role = "User" if msg["role"] == "user" else "NEO"
+                            history_str += f"{role}: {msg['text']}\n"
+                        except Exception:
+                            continue
+                    history_str += "\n(The above is your recent memory. Resume the conversation naturally from here.)\n\n"
+                    parts.append(history_str)
+        except Exception as e:
+            print(f"[Memory] Failed to load conversation history: {e}")
+
+        # Inject NeoProjects structure
+        try:
+            neo_proj = Path.home() / "Desktop" / "NeoProjects"
+            if neo_proj.exists():
+                proj_files = []
+                for root, dirs, files in os.walk(neo_proj):
+                    dirs[:] = [d for d in dirs if not d.startswith('.')] # skip hidden
+                    rel_root = Path(root).relative_to(neo_proj)
+                    for f in files:
+                        if not f.startswith('.'):
+                            proj_files.append(str(rel_root / f) if str(rel_root) != "." else f)
+                
+                if proj_files:
+                    proj_str = "[WORKSPACE CONTEXT: Desktop/NeoProjects]\n"
+                    proj_str += "The user has an active workspace directory at ~/Desktop/NeoProjects containing:\n"
+                    proj_str += "\n".join(f"- {f}" for f in proj_files[:100]) # cap at 100 files
+                    if len(proj_files) > 100:
+                        proj_str += "\n... and more."
+                    proj_str += "\n\n"
+                    parts.append(proj_str)
+        except Exception as e:
+            pass
+
+        try:
+            from actions.skill_loader import build_skills_catalog
+
+            catalog = build_skills_catalog()
+            if catalog:
+                parts.append(catalog + "\n\n")
+        except Exception as e:
+            print(f"[SkillLoader] Failed to build skills catalog: {e}")
+
+        try:
+            from core.action_context import format_for_prompt
+
+            action_ctx = format_for_prompt()
+            if action_ctx:
+                parts.append(action_ctx)
+        except Exception as e:
+            print(f"[ActionContext] Failed to load action context: {e}")
+
+        try:
+            from config import get_default_location
+
+            loc = get_default_location()
+            if loc:
+                parts.append(
+                    f"[USER LOCATION]\n"
+                    f"The user's default city is: {loc}\n"
+                    f"For weather with no city specified, use weather_report without a city.\n\n"
+                )
+        except Exception:
+            pass
+
+        # ── Inject ranked stored memories ──
+        try:
+            from core.memory_ext import get_session_memory_block
+            from core.memory_importance import format_importance_for_prompt
+
+            raw_memories = get_session_memory_block()
+            # Rebuild with importance ranking by fetching raw list
+            from core.memory_ext import get_all_memories
+            all_mem = get_all_memories(limit=50)
+            if all_mem:
+                ranked = format_importance_for_prompt(all_mem)
+                if ranked:
+                    parts.append(ranked + "\n\n")
+        except Exception:
+            pass
+
+        # ── Inject compressed conversation history ──
+        try:
+            from core.conversation_compactor import get_compactor
+
+            conv_ctx = get_compactor().get_context_block()
+            if conv_ctx:
+                parts.append(conv_ctx + "\n\n")
+        except Exception:
+            pass
 
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             output_audio_transcription={},
             input_audio_transcription={},
             system_instruction="\n".join(parts),
-            tools=[{"function_declarations": TOOL_DECLARATIONS}],
+            tools=[{"function_declarations": CORE_TOOL_DECLARATIONS}],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
                     prebuilt_voice_config=types.PrebuiltVoiceConfig(
@@ -1472,7 +1687,7 @@ class AriaLive:
 
         dup = self._fast_path_duplicate_result(name, args)
         if dup is not None:
-            print(f"[ARIA] ⏭️ Skipping duplicate {name} (fast path already handled)")
+            print(f"[NEO] ⏭️ Skipping duplicate {name} (fast path already handled)")
             if self._mic_live:
                 self.ui.set_state("LISTENING")
             return types.FunctionResponse(
@@ -1480,7 +1695,7 @@ class AriaLive:
                 response={"result": dup, "fast_path": True},
             )
 
-        print(f"[ARIA] 🔧 {name}  {args}")
+        print(f"[NEO] 🔧 {name}  {args}")
         self.ui.set_state("THINKING")
         self._cancel_think_filler()
 
@@ -1493,20 +1708,53 @@ class AriaLive:
         elif show_progress and self._processing:
             self._announce_tool_start(name, args)
 
-        if name == "shutdown_aria":
+        if name == "shutdown_neo":
             self._show_status_text("Goodbye.")
 
+        # ── Circuit breaker check ──
         try:
-            return await _HYBRID_ORCHESTRATOR.execute_tool_for_live(
+            from core.error_recovery import is_circuit_open
+            if is_circuit_open(name):
+                from core.error_recovery import _registry
+                msg = _registry.get_open_message(name)
+                print(f"[NEO] 🛑 Circuit OPEN for {name}")
+                return types.FunctionResponse(
+                    id=fc.id, name=name,
+                    response={"result": msg},
+                )
+        except Exception:
+            pass
+
+        try:
+            result = await _HYBRID_ORCHESTRATOR.execute_tool_for_live(
                 fc,
                 self,
                 on_finish=lambda n, res: self._after_tool_result(
                     n, res, show_progress=show_progress,
                 ),
             )
+            # Record success
+            try:
+                from core.error_recovery import _dashboard
+                _dashboard.record_success(name)
+            except Exception:
+                pass
+            return result
         except Exception as e:
             traceback.print_exc()
             self.speak_error(name, e)
+            # ── Record error for circuit breaker ──
+            try:
+                from core.error_recovery import record_error
+                guidance = record_error(name, e)
+                if guidance.get("circuit_open"):
+                    self._show_status_text(
+                        f"Tool '{name}' temporarily blocked — too many failures."
+                    )
+                elif guidance.get("fallback"):
+                    print(f"[NEO] ⚠️ {name} failed, fallback: {guidance['fallback']}")
+            except Exception:
+                pass
             if show_progress:
                 self._finish_processing()
             return types.FunctionResponse(
@@ -1525,7 +1773,12 @@ class AriaLive:
         self._speak_tool_result_hints(text)
         if show_progress and text and not text.startswith("Tool '"):
             self._show_status_text(text.split("\n")[0][:180])
-        print(f"[ARIA] 📤 {name} → {text[:80]}")
+        print(f"[NEO] 📤 {name} → {text[:80]}")
+        try:
+            from core.memory_suggestions import record_tool_call
+            record_tool_call(name)
+        except Exception:
+            pass
 
     async def _send_realtime(self):
         while True:
@@ -1537,7 +1790,7 @@ class AriaLive:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                print(f"[ARIA] Mic send stopped: {e}")
+                print(f"[NEO] Mic send stopped: {e}")
                 return
 
     async def _handle_tool_calls(self, tool_call) -> None:
@@ -1561,18 +1814,18 @@ class AriaLive:
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            print(f"[ARIA] ❌ Tool batch: {e}")
+            print(f"[NEO] ❌ Tool batch: {e}")
             traceback.print_exc()
             self._reset_live_session_state()
 
     async def _listen_audio(self):
-        print("[ARIA] 🎤 Mic started")
+        print("[NEO] 🎤 Mic started")
         loop = asyncio.get_event_loop()
         in_dev, _ = _default_audio_devices()
 
         def callback(indata, frames, time_info, status):
             with self._speaking_lock:
-                aria_speaking = self._is_speaking
+                neo_speaking = self._is_speaking
             pcm = indata.tobytes()
 
             wake_phase = self._get_phase()
@@ -1584,7 +1837,7 @@ class AriaLive:
                 and not self._processing
                 and not self._offline_tts_active
                 and not self._speech_exclusive.locked()
-                and not aria_speaking
+                and not neo_speaking
                 and time.time() >= self._wake_listen_blocked_until
             ):
                 trigger = self._wake_listener.feed(pcm)
@@ -1592,7 +1845,7 @@ class AriaLive:
                     self.ui.siri_wake()
                     loop.call_soon_threadsafe(self._handle_wake_trigger, trigger)
 
-            if self._mic_live and not aria_speaking:
+            if self._mic_live and not neo_speaking:
                 if self._noise_gate:
                     pcm = self._noise_gate.process(pcm)
                 self._extend_listen_on_voice(pcm)
@@ -1615,19 +1868,34 @@ class AriaLive:
         try:
             stream = sd.InputStream(**kwargs, callback=callback)
             with stream:
-                print("[ARIA] 🎤 Mic stream open")
+                dev_label = in_dev if in_dev is not None else "default"
+                print(f"[NEO] Mic stream open (device={dev_label})")
                 while True:
                     await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            print(f"[ARIA] ❌ Mic: {e}")
-            raise
+            print(f"[NEO] Mic disabled: {e} (Text-only mode)")
+            try:
+                devices = sd.query_devices()
+                inputs = [
+                    f"  [{i}] {d.get('name', '?')}"
+                    for i, d in enumerate(devices)
+                    if int(d.get("max_input_channels", 0)) > 0
+                ]
+                if inputs:
+                    print("[NEO] Available inputs:\n" + "\n".join(inputs[:8]))
+                else:
+                    print("[NEO] No input devices found — check Windows Sound settings.")
+            except Exception:
+                pass
+            while True:
+                await asyncio.sleep(3600)
         finally:
             sd.stop()
 
     async def _receive_audio(self):
-        print("[ARIA] 👂 Recv started")
+        print("[NEO] 👂 Recv started")
 
         try:
             while True:
@@ -1660,8 +1928,8 @@ class AriaLive:
                                 if live and not (
                                     _is_ack_only(live) and self._ack_spoken_this_turn
                                 ):
-                                    self.ui.stream_aria(live)
-                                    self._aria_streaming = True
+                                    self.ui.stream_neo(live)
+                                    self._neo_streaming = True
 
                         if sc.input_transcription and sc.input_transcription.text:
                             txt = _clean_transcript(sc.input_transcription.text)
@@ -1682,7 +1950,7 @@ class AriaLive:
                     if response.tool_call:
                         asyncio.create_task(
                             self._handle_tool_calls(response.tool_call),
-                            name=f"ARIA-tool-{response.tool_call.function_calls[0].name if response.tool_call.function_calls else 'batch'}",
+                            name=f"NEO-tool-{response.tool_call.function_calls[0].name if response.tool_call.function_calls else 'batch'}",
                         )
         except asyncio.CancelledError:
             raise
@@ -1692,16 +1960,16 @@ class AriaLive:
                 tok in err
                 for tok in ("1006", "1008", "keepalive", "closed", "abnormal closure")
             ):
-                print(f"[ARIA] Live session dropped — reconnecting.")
+                print(f"[NEO] Live session dropped — reconnecting.")
             else:
-                print(f"[ARIA] ❌ Recv: {e}")
+                print(f"[NEO] ❌ Recv: {e}")
                 traceback.print_exc()
             self._reset_live_session_state()
             self.set_speaking(False, block_wake_after=False)
             return
 
     async def _play_audio(self):
-        print("[ARIA] 🔊 Play started")
+        print("[NEO] 🔊 Play started")
         stream: sd.RawOutputStream | None = None
         play_rate = RECEIVE_SAMPLE_RATE
         playback_ok = True
@@ -1737,15 +2005,15 @@ class AriaLive:
                         stream, play_rate = await asyncio.to_thread(_open_playback_stream)
                     except Exception as e:
                         playback_ok = False
-                        print(f"[ARIA] ❌ Play: {e}")
-                        print("[ARIA] Speaker unavailable — check System Settings → Sound output.")
+                        print(f"[NEO] ❌ Play: {e}")
+                        print("[NEO] Speaker unavailable — check System Settings → Sound output.")
                         continue
 
                 if time.time() < self._suppress_live_audio_until:
                     continue
 
                 if self._get_phase() in (MicPhase.USER_SPEAKING, MicPhase.FOLLOWUP):
-                    self._mark_aria_reply_started()
+                    self._mark_neo_reply_started()
 
                 self.set_speaking(True)
                 if play_rate != RECEIVE_SAMPLE_RATE:
@@ -1754,7 +2022,7 @@ class AriaLive:
                 try:
                     await asyncio.to_thread(stream.write, chunk)
                 except Exception as e:
-                    print(f"[ARIA] ❌ Play write: {e}")
+                    print(f"[NEO] ❌ Play write: {e}")
                     try:
                         stream.stop()
                         stream.close()
@@ -1763,7 +2031,7 @@ class AriaLive:
                     stream = None
                     sd.stop()
                     playback_ok = False
-                    print("[ARIA] Speaker stream lost — retrying on next reply.")
+                    print("[NEO] Speaker stream lost — retrying on next reply.")
         except asyncio.CancelledError:
             raise
         finally:
@@ -1788,7 +2056,7 @@ class AriaLive:
             with self._speaking_lock:
                 if self._is_speaking:
                     continue
-            if self._processing or self._aria_streaming or self._turn_finalize_pending:
+            if self._processing or self._neo_streaming or self._turn_finalize_pending:
                 continue
             if self.audio_in_queue and not self.audio_in_queue.empty():
                 continue
@@ -1809,15 +2077,15 @@ class AriaLive:
     def _report_connect_issue(self, kind: str, message: str, *, repeat: int) -> None:
         """Log + show status without spamming identical errors every 3 seconds."""
         if repeat == 0:
-            print(f"[ARIA] ⚠️ {message}")
+            print(f"[NEO] ⚠️ {message}")
             self._show_status_text(message)
         elif repeat % 6 == 0:
-            print(f"[ARIA] ⚠️ Still waiting ({kind})…")
+            print(f"[NEO] ⚠️ Still waiting ({kind})…")
 
     async def run(self):
         key_err = _api_key_config_error()
         if key_err:
-            print(f"[ARIA] ❌ {key_err}")
+            print(f"[NEO] ❌ {key_err}")
             self._show_status_text(key_err)
             return
 
@@ -1844,7 +2112,7 @@ class AriaLive:
                 continue
 
             try:
-                print("[ARIA] 🔌 Connecting...")
+                print("[NEO] 🔌 Connecting...")
                 self.ui.set_state("THINKING")
                 config = self._build_config()
 
@@ -1863,14 +2131,14 @@ class AriaLive:
                     last_kind = None
                     repeat = 0
 
-                    print(f"[ARIA] ✅ Connected. Voice={_live_voice_name()}")
+                    print(f"[NEO] Connected. Voice={_live_voice_name()} tools={len(CORE_TOOL_DECLARATIONS)}")
                     if self._smart_mode:
                         self._user_spoke_this_turn = False
                         self._set_phase(MicPhase.STANDBY)
-                        print("[ARIA] Standby — say 'Hey Aria' or clap twice.")
+                        print("[NEO] Standby — say 'Hey Neo' or clap twice.")
                     else:
                         self.ui.set_state("LISTENING")
-                        print("[ARIA] Online.")
+                        print("[NEO] Online.")
 
                     tg.create_task(self._send_realtime())
                     tg.create_task(self._listen_audio())
@@ -1893,9 +2161,9 @@ class AriaLive:
                         continue
                     kinds.append(kind)
                     if kind == "transient" and repeat == 0:
-                        print(f"[ARIA] Session ended ({type(sub).__name__})")
+                        print(f"[NEO] Session ended ({type(sub).__name__})")
                     elif kind == "unknown" and repeat == 0:
-                        print(f"[ARIA] ⚠️ {sub}")
+                        print(f"[NEO] ⚠️ {sub}")
                         traceback.print_exception(type(sub), sub, sub.__traceback__)
 
                 if not kinds:
@@ -1936,11 +2204,22 @@ class AriaLive:
             self.ui.set_state("THINKING")
             wait = int(backoff)
             if repeat <= 1 or repeat % 6 == 0:
-                print(f"[ARIA] 🔄 Reconnecting in {wait}s…")
+                print(f"[NEO] 🔄 Reconnecting in {wait}s…")
             await asyncio.sleep(backoff)
 
 def main():
-    ui = AriaUI("face.png")
+    ui = NeoUI("face.png")
+
+    # ── Startup validation ──
+    try:
+        from core.startup_check import run_all_checks
+        report = run_all_checks(verbose=True)
+        for line in report.to_lines():
+            print(line)
+        if not report.all_pass:
+            print("[NEO] ⚠️ Some dependency checks failed — NEO may have limited functionality.")
+    except Exception:
+        pass
 
     try:
         from actions.vision_local import preload_vision_models
@@ -1951,9 +2230,9 @@ def main():
 
     def runner():
         ui.wait_for_api_key()
-        aria = AriaLive(ui)
+        neo = NeoLive(ui)
         try:
-            asyncio.run(aria.run())
+            asyncio.run(neo.run())
         except KeyboardInterrupt:
             print("\n🔴 Shutting down...")
 

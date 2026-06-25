@@ -1,7 +1,7 @@
-"""ARIA's macOS menu-bar presence.
+"""NEO's macOS menu-bar presence.
 
 A QSystemTrayIcon that lives in the top-right menu bar (like Siri). A left
-click pops ARIA out / tucks it away; a right click opens a small menu with
+click pops NEO out / tucks it away; a right click opens a small menu with
 Show / Quit. The icon is the cyan pixel robot, rendered crisply from the same
 sprite the buddy uses.
 """
@@ -36,8 +36,8 @@ def robot_icon(height_px: int = 54) -> QIcon:
     return QIcon(pm)
 
 
-class AriaTray(QSystemTrayIcon):
-    """Menu-bar status item. Left click toggles ARIA; right click shows a menu."""
+class NeoTray(QSystemTrayIcon):
+    """Menu-bar status item. Left click toggles NEO; right click shows a menu."""
 
     def __init__(
         self,
@@ -50,7 +50,7 @@ class AriaTray(QSystemTrayIcon):
         self._on_toggle = on_toggle
         self._on_show = on_show or on_toggle
         self._on_quit = on_quit
-        self.setToolTip("ARIA — click to summon")
+        self.setToolTip("NEO — click to summon")
 
         # Build a menu but DON'T setContextMenu(): on macOS that hijacks the
         # left click to open the menu. We pop it manually on right click so the

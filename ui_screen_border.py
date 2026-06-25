@@ -1,4 +1,4 @@
-"""Soft cyan/blue edge vignette while ARIA captures / analyzes the screen."""
+"""Soft cyan/blue edge vignette while NEO captures / analyzes the screen."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ class ScreenBorderOverlay(QWidget):
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Window
+            | Qt.WindowType.Tool
             | Qt.WindowType.WindowDoesNotAcceptFocus
             | Qt.WindowType.WindowTransparentForInput
         )

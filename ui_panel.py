@@ -1,198 +1,298 @@
-"""ARIA's full window — a cozy, polished chat panel that matches the robot pet.
-
-Clean message bubbles with soft shadows, a green/cream/slate palette cohesive
-with the robot's CRT screen, a tidy header, and a circular send button. Built as
-reusable widgets so they drop into the real app; previewed via ui_preview.py.
-"""
+"""NEO chat panel — sharp dark UI with Claude-style blocks."""
 
 from __future__ import annotations
 
-import platform
+import html
+import json
+import re
+from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
 )
 
-from ui_buddy import PixelBuddy
-
-# --- palette (cohesive with the cyan robot) --------------------------------
-BG       = "#181d1c"   # slate-teal near-black
-CARD_B   = "#2c3a38"   # card border
-SURFACE  = "#222b2a"   # ARIA bubble / input
-GREEN    = "#22a89c"   # (accent = cyan; names kept)
-GREEN_D  = "#178a80"
-GREEN_L  = "#6fe3d6"
-CREAM    = "#ecd6a6"
-TEXT     = "#eef3f2"
-DIM      = "#9bada9"
-
-_UI = ".AppleSystemUIFont" if platform.system() == "Darwin" else "Segoe UI"
+from ui_blocks import (
+    CodeBlock,
+    CommandBlock,
+    SourcesBlock,
+    _cmd_label,
+    extract_urls,
+    parse_ai_blocks,
+)
+from ui_theme import C, ghost_action_button_stylesheet
 
 
-def _f(size: int, bold: bool = False) -> QFont:
-    f = QFont(_UI, size)
+def _font(size: int, bold: bool = False) -> QFont:
+    from ui_theme import _UI_FONT
+    f = QFont(_UI_FONT, size)
     f.setBold(bold)
     return f
 
 
-def _shadow(w, blur=16, dy=4, alpha=110):
-    s = QGraphicsDropShadowEffect(w)
-    s.setBlurRadius(blur)
-    s.setOffset(0, dy)
-    s.setColor(QColor(0, 0, 0, alpha))
-    w.setGraphicsEffect(s)
+def _format_prose_html(text: str) -> str:
+    """Rich text: bold, inline code, numbered lines."""
+
+    def _inline_format(raw: str) -> str:
+        codes: list[str] = []
+
+        def _stash_code(m: re.Match) -> str:
+            codes.append(m.group(1))
+            return f"\x00C{len(codes) - 1}\x00"
+
+        s = re.sub(r"`([^`]+)`", _stash_code, raw)
+        s = html.escape(s)
+        s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
+        for i, code in enumerate(codes):
+            chip = html.escape(code)
+            s = s.replace(
+                f"\x00C{i}\x00",
+                f'<span style="font-family:Consolas,Menlo,monospace;'
+                f"background:rgba(255,255,255,0.08);padding:1px 6px;border-radius:4px;"
+                f'">{chip}</span>',
+            )
+        return s
+
+    parts: list[str] = []
+    for line in text.split("\n"):
+        raw = line.strip()
+        if not raw:
+            parts.append("<br/>")
+            continue
+        fmt = _inline_format(raw)
+        if raw.endswith(":") and len(raw) < 48 and not raw[0].isdigit():
+            parts.append(f'<p style="margin:10px 0 4px 0;"><b>{fmt}</b></p>')
+        elif re.match(r"^\d+\.\s", raw):
+            num = raw.split(".", 1)[0]
+            body = _inline_format(raw.split(".", 1)[1].strip()) if "." in raw else fmt
+            parts.append(
+                f'<p style="margin:4px 0;">'
+                f'<span style="color:{C.BLUE};font-weight:600;">{num}.</span> {body}</p>'
+            )
+        else:
+            parts.append(f'<p style="margin:2px 0 6px 0;">{fmt}</p>')
+    return "".join(parts)
 
 
-class _Bubble(QFrame):
-    def __init__(self, text: str, who: str):
+class _DateStamp(QWidget):
+    def __init__(self, when: datetime | None = None):
         super().__init__()
-        self.setObjectName("bubble")
+        when = when or datetime.now()
+        label = _format_stamp(when)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 8, 0, 4)
+        lab = QLabel(label)
+        lab.setFont(_font(9))
+        lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lab.setStyleSheet(f"color: {C.TEXT_MED}; background: transparent;")
+        lay.addStretch(1)
+        lay.addWidget(lab)
+        lay.addStretch(1)
+
+
+def _format_stamp(when: datetime) -> str:
+    now = datetime.now()
+    time_part = when.strftime("%I:%M %p").lstrip("0")
+    if when.date() == now.date():
+        return f"Today {time_part}"
+    if (now.date() - when.date()).days == 1:
+        return f"Yesterday {time_part}"
+    return when.strftime("%b %d, %Y · %I:%M %p").lstrip("0")
+
+
+class _UserBubble(QFrame):
+    def __init__(self, text: str):
+        super().__init__()
+        self.setObjectName("userBubble")
         lab = QLabel(text)
         lab.setWordWrap(True)
-        lab.setFont(_f(12))
-        self._lab = lab
+        lab.setFont(_font(11))
+        lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lab.setStyleSheet(f"color: {C.WHITE}; background: transparent; border: none;")
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(15, 10, 15, 11)
+        lay.setContentsMargins(16, 12, 16, 12)
         lay.addWidget(lab)
-        self.setMaximumWidth(252)
-        if who == "you":
-            lab.setStyleSheet("color:#ffffff; background:transparent; border:none;")
-            self.setStyleSheet(f"QFrame#bubble {{ background:{GREEN_D}; border:none; border-radius:16px; }}")
-        else:
-            lab.setStyleSheet(f"color:{TEXT}; background:transparent; border:none;")
-            self.setStyleSheet(f"QFrame#bubble {{ background:{SURFACE}; border:none; border-radius:16px; }}")
-        _shadow(self, blur=14, dy=3, alpha=70)
+        self._lab = lab
+        self._apply_label_width()
+        self.setMaximumWidth(280)
+        self.setStyleSheet(f"""
+            QFrame#userBubble {{
+                background: {C.USER_BUB};
+                border: none;
+                border-radius: 16px;
+            }}
+        """)
 
     def set_text(self, text: str) -> None:
         self._lab.setText(text)
 
+    def set_max_bubble_width(self, w: int) -> None:
+        self.setMaximumWidth(w)
+        self._apply_label_width()
 
-def _row(bubble: QFrame, who: str) -> QWidget:
+    def _apply_label_width(self) -> None:
+        inner = max(120, self.maximumWidth() - 32)
+        self._lab.setMaximumWidth(inner)
+
+
+class _AiMessage(QWidget):
+    def __init__(self, text: str, *, show_actions: bool = True, streaming: bool = False):
+        super().__init__()
+        self._plain = text
+        self._streaming = streaming
+        self._prose_label: QLabel | None = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 4, 0, 4)
+        root.setSpacing(10)
+        self._root = root
+
+        if streaming:
+            lab = QLabel(text)
+            lab.setWordWrap(True)
+            lab.setFont(_font(11))
+            lab.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            lab.setStyleSheet(
+                f"color: {C.AI}; background: transparent; line-height: 1.45;"
+            )
+            root.addWidget(lab)
+            self._prose_label = lab
+            return
+
+        self._build_content(text, show_actions=show_actions)
+
+    def _build_content(self, text: str, *, show_actions: bool) -> None:
+        segments = parse_ai_blocks(text)
+        prose_chunks: list[str] = []
+        cmd_list: list[str] = []
+        code_blocks: list[tuple[str, str]] = []
+        all_sources: list[dict] = []
+
+        for kind, payload in segments:
+            if kind == "code":
+                lang, code = payload  # type: ignore[misc]
+                code_blocks.append((lang, code))
+            elif kind == "cmd":
+                cmd_list.append(str(payload))
+            elif kind == "prose":
+                prose, urls = extract_urls(str(payload))
+                all_sources.extend(urls)
+                if prose.strip():
+                    prose_chunks.append(prose)
+
+        if prose_chunks:
+            combined = "\n\n".join(prose_chunks)
+            lab = QLabel()
+            lab.setWordWrap(True)
+            lab.setFont(_font(11))
+            lab.setTextFormat(Qt.TextFormat.RichText)
+            lab.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            lab.setStyleSheet(
+                f"color: {C.AI}; background: transparent; line-height: 1.45;"
+            )
+            lab.setText(_format_prose_html(combined))
+            self._root.addWidget(lab)
+            self._prose_label = lab
+
+        for lang, code in code_blocks:
+            self._root.addWidget(CodeBlock(code, lang))
+
+        for cmd in cmd_list:
+            self._root.addWidget(CommandBlock(cmd, label=_cmd_label(cmd)))
+
+        if all_sources:
+            # dedupe sources by url
+            seen: set[str] = set()
+            unique: list[dict] = []
+            for s in all_sources:
+                u = s.get("url", "")
+                if u and u not in seen:
+                    seen.add(u)
+                    unique.append(s)
+            if unique:
+                self._root.addWidget(SourcesBlock(unique))
+
+        if show_actions and text.strip():
+            actions = QHBoxLayout()
+            actions.setSpacing(8)
+            copy_btn = QPushButton("⎘  Copy")
+            copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            copy_btn.setStyleSheet(ghost_action_button_stylesheet())
+            copy_btn.clicked.connect(self._copy)
+            actions.addWidget(copy_btn)
+            actions.addStretch(1)
+            self._root.addLayout(actions)
+
+    def set_text(self, text: str) -> None:
+        self._plain = text
+        if self._prose_label is not None:
+            self._prose_label.setText(text)
+
+    def set_max_content_width(self, w: int) -> None:
+        self.setMaximumWidth(w)
+        inner = max(120, w - 4)
+        if self._prose_label is not None:
+            self._prose_label.setMaximumWidth(inner)
+        for block in self.findChildren(QFrame):
+            if block.objectName() == "contentBlock":
+                block.setMaximumWidth(inner)
+
+    def _copy(self) -> None:
+        QApplication.clipboard().setText(self._plain)
+
+
+class _EmptyState(QWidget):
+    def __init__(self):
+        super().__init__()
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 0, 4, 16)
+        lay.setSpacing(6)
+        greet = QLabel("Hi, I'm NEO")
+        greet.setFont(_font(16, bold=True))
+        greet.setStyleSheet(f"color: {C.TEXT}; background: transparent;")
+        sub = QLabel(
+            "Ask me anything — voice, typing, or drag a file in.\n"
+            "Double-click the orb to open chat."
+        )
+        sub.setFont(_font(10))
+        sub.setWordWrap(True)
+        sub.setStyleSheet(
+            f"color: {C.TEXT_DIM}; background: transparent; line-height: 1.5;"
+        )
+        lay.addWidget(greet)
+        lay.addWidget(sub)
+        lay.addWidget(_DateStamp())
+        lay.addStretch(1)
+
+
+def _user_row(bubble: QFrame) -> QWidget:
     w = QWidget()
     lay = QHBoxLayout(w)
     lay.setContentsMargins(0, 0, 0, 0)
-    if who == "you":
-        lay.addStretch(1)
-        lay.addWidget(bubble)
-    else:
-        lay.addWidget(bubble)
-        lay.addStretch(1)
+    lay.addStretch(1)
+    lay.addWidget(bubble)
     return w
 
 
-class RetroPanel(QFrame):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("card")
-        self.setStyleSheet(f"""
-            QFrame#card {{
-                background: {BG};
-                border: 1px solid {CARD_B};
-                border-radius: 22px;
-            }}
-        """)
-        _shadow(self, blur=50, dy=16, alpha=160)
-
-        root = QVBoxLayout(self)
-        root.setContentsMargins(18, 16, 18, 18)
-        root.setSpacing(0)
-
-        # --- header ---
-        header = QHBoxLayout()
-        header.setSpacing(12)
-        pet = PixelBuddy()
-        pet.setFixedSize(50, 50)
-        header.addWidget(pet)
-        tcol = QVBoxLayout()
-        tcol.setSpacing(1)
-        name = QLabel("ARIA")
-        name.setFont(_f(16, bold=True))
-        name.setStyleSheet(f"color:{TEXT}; letter-spacing:1px;")
-        sub = QLabel("●  online")
-        sub.setFont(_f(10))
-        sub.setStyleSheet(f"color:{GREEN_L};")
-        tcol.addWidget(name)
-        tcol.addWidget(sub)
-        header.addLayout(tcol)
-        header.addStretch(1)
-        root.addLayout(header)
-
-        # divider
-        div = QFrame()
-        div.setFixedHeight(1)
-        div.setStyleSheet(f"background:{CARD_B}; border:none;")
-        root.addSpacing(12)
-        root.addWidget(div)
-        root.addSpacing(10)
-
-        # --- chat ---
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}"
-                             "QScrollBar:vertical{background:transparent;width:6px;}"
-                             f"QScrollBar::handle:vertical{{background:{CARD_B};border-radius:3px;}}"
-                             "QScrollBar::add-line,QScrollBar::sub-line{height:0;}")
-        chat = QWidget()
-        chat.setStyleSheet("background:transparent;")
-        cl = QVBoxLayout(chat)
-        cl.setContentsMargins(2, 2, 6, 2)
-        cl.setSpacing(12)
-        demo = [
-            ("aria", "hey! i'm right here whenever you need me."),
-            ("you", "open my downloads folder"),
-            ("aria", "on it — opening Downloads now."),
-            ("you", "what's the weather like?"),
-            ("aria", "sunny and 24°  — a lovely day to head out."),
-        ]
-        for who, txt in demo:
-            cl.addWidget(_row(_Bubble(txt, who), who))
-        cl.addStretch(1)
-        scroll.setWidget(chat)
-        root.addWidget(scroll, stretch=1)
-
-        # --- input ---
-        root.addSpacing(12)
-        inp_row = QHBoxLayout()
-        inp_row.setSpacing(10)
-        inp = QLineEdit()
-        inp.setPlaceholderText("Message ARIA…")
-        inp.setFont(_f(12))
-        inp.setFixedHeight(44)
-        inp.setStyleSheet(f"""
-            QLineEdit {{
-                background:{SURFACE}; color:{TEXT};
-                border:1px solid {CARD_B}; border-radius:22px;
-                padding:4px 16px;
-            }}
-            QLineEdit:focus {{ border:1px solid {GREEN}; }}
-        """)
-        send = QPushButton("↑")
-        send.setFont(_f(17, bold=True))
-        send.setFixedSize(44, 44)
-        send.setCursor(Qt.CursorShape.PointingHandCursor)
-        send.setStyleSheet(f"""
-            QPushButton {{
-                background:{GREEN}; color:#0e1a12;
-                border:none; border-radius:22px;
-            }}
-            QPushButton:hover {{ background:{GREEN_L}; }}
-            QPushButton:pressed {{ background:{GREEN_D}; }}
-        """)
-        inp_row.addWidget(inp, stretch=1)
-        inp_row.addWidget(send)
-        root.addLayout(inp_row)
+def _ai_row(widget: QWidget) -> QWidget:
+    w = QWidget()
+    lay = QHBoxLayout(w)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.addWidget(widget, stretch=1)
+    return w
 
 
 class ChatView(QScrollArea):
-    """Bubble chat — a drop-in for the old LogWidget.
-
-    Implements the methods the app calls: append_log(text), update_aria_stream(body),
-    end_aria_stream(body, formatted). All run on the GUI thread.
-    """
+    retry_last = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -200,82 +300,180 @@ class ChatView(QScrollArea):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setFrameShape(QScrollArea.Shape.NoFrame)
         self.setStyleSheet(
-            "QScrollArea{background:transparent;border:none;}"
-            "QScrollBar:vertical{background:transparent;width:6px;margin:2px;}"
-            f"QScrollBar::handle:vertical{{background:{CARD_B};border-radius:3px;min-height:24px;}}"
+            f"QScrollArea{{background:{C.BG};border:none;}}"
+            "QScrollBar:vertical{background:transparent;width:5px;margin:2px 1px;}"
+            "QScrollBar::handle:vertical{background:rgba(255,255,255,0.12);"
+            "border-radius:2px;min-height:24px;}"
             "QScrollBar::add-line,QScrollBar::sub-line{height:0;}"
         )
         self._host = QWidget()
-        self._host.setStyleSheet("background:transparent;")
+        self._host.setStyleSheet(f"background:{C.BG};")
         self._lay = QVBoxLayout(self._host)
-        self._lay.setContentsMargins(4, 6, 8, 6)
-        self._lay.setSpacing(11)
+        self._lay.setContentsMargins(10, 0, 10, 8)
+        self._lay.setSpacing(16)
+        self._empty = _EmptyState()
+        self._lay.addWidget(self._empty)
         self._lay.addStretch(1)
         self.setWidget(self._host)
-        self._stream_bubble = None
+        self._stream_msg: _AiMessage | None = None
+        self._last_user = ""
+        self._last_tool_status = ""
+        self._last_stamp_day: str | None = None
+        self._scroll_debounce = QTimer(self)
+        self._scroll_debounce.setSingleShot(True)
+        self._scroll_debounce.setInterval(40)
+        self._scroll_debounce.timeout.connect(self._scroll_bottom)
 
     @property
-    def _aria_stream_active(self) -> bool:
-        return self._stream_bubble is not None
+    def _neo_stream_active(self) -> bool:
+        return self._stream_msg is not None
 
-    # --- internals ----------------------------------------------------------
-    def _add(self, widget) -> None:
-        self._lay.insertWidget(self._lay.count() - 1, widget)  # before the stretch
-        QTimer.singleShot(0, self._scroll_bottom)
+    def _hide_empty(self) -> None:
+        if self._empty.isVisible():
+            self._empty.hide()
+
+    def _maybe_stamp(self) -> None:
+        day = datetime.now().strftime("%Y-%m-%d")
+        if self._last_stamp_day == day:
+            return
+        self._last_stamp_day = day
+        self._add(_DateStamp(), count=False)
+
+    def _add(self, widget, *, count: bool = True) -> None:
+        self._hide_empty()
+        self._lay.insertWidget(self._lay.count() - 1, widget)
+        self._reflow_widths()
+        QTimer.singleShot(50, self._scroll_bottom)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._reflow_widths()
+
+    def _reflow_widths(self) -> None:
+        mw = max(160, self.viewport().width() - 24)
+        user_w = int(mw * 0.86)
+        for i in range(self._lay.count()):
+            item = self._lay.itemAt(i)
+            w = item.widget()
+            if w is None or w is self._empty:
+                continue
+            w.setMaximumWidth(mw)
+            for bubble in w.findChildren(_UserBubble):
+                bubble.set_max_bubble_width(user_w)
+            for msg in w.findChildren(_AiMessage):
+                msg.set_max_content_width(mw)
 
     def _scroll_bottom(self) -> None:
         sb = self.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-    def _system(self, text: str) -> QWidget:
-        w = QWidget()
-        lay = QHBoxLayout(w)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lab = QLabel(text)
-        lab.setFont(_f(10))
-        lab.setWordWrap(True)
-        lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lab.setStyleSheet(f"color:{DIM}; background:transparent;")
-        lay.addStretch(1)
-        lay.addWidget(lab)
-        lay.addStretch(1)
-        return w
+    def _save_history(self, role: str, text: str):
+        from core.paths import base_dir
 
-    # --- public API (matches LogWidget) ------------------------------------
+        mem_dir = base_dir() / "memory"
+        mem_dir.mkdir(exist_ok=True, parents=True)
+        hist_file = mem_dir / "conversation_history.txt"
+        lines = []
+        if hist_file.exists():
+            try:
+                lines = hist_file.read_text(encoding="utf-8").strip().split("\n")
+            except Exception:
+                pass
+        clean_text = text.replace("\n", " ")
+        lines.append(json.dumps({"role": role, "text": clean_text}))
+        lines = lines[-20:]
+        try:
+            hist_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+    def append_tool_block(self, label: str, detail: str = "") -> None:
+        """Legacy hook — tool status is shown on the bar, not as chat blocks."""
+        return
+
+    def _add_ai(self, text: str, *, streaming: bool = False) -> _AiMessage:
+        self._last_tool_status = ""
+        self._maybe_stamp()
+        msg = _AiMessage(text, show_actions=not streaming)
+        self._add(_ai_row(msg))
+        return msg
+
     def append_log(self, text: str) -> None:
         t = (text or "").strip()
         if not t:
             return
         low = t.lower()
+        if low.startswith("system:"):
+            return  # hide system noise (e.g. conversation reset)
         if low.startswith("you:"):
-            self._add(_row(_Bubble(t.split(":", 1)[1].strip(), "you"), "you"))
-        elif low.startswith("aria:"):
-            self._add(_row(_Bubble(t.split(":", 1)[1].strip(), "aria"), "aria"))
+            msg = t.split(":", 1)[1].strip()
+            self._last_user = msg
+            self._maybe_stamp()
+            self._add(_user_row(_UserBubble(msg)))
+            self._save_history("user", msg)
+        elif low.startswith("neo:"):
+            msg = t.split(":", 1)[1].strip()
+            self._add_ai(msg)
+            self._save_history("model", msg)
         elif low.startswith("file:"):
-            self._add(self._system("📎 " + t.split(":", 1)[1].strip()))
+            self._maybe_stamp()
+            chip = QLabel("📎 " + t.split(":", 1)[1].strip())
+            chip.setFont(_font(9))
+            chip.setStyleSheet(f"color:{C.TEXT_DIM}; background:transparent;")
+            w = QWidget()
+            lay = QHBoxLayout(w)
+            lay.addStretch(1)
+            lay.addWidget(chip)
+            lay.addStretch(1)
+            self._add(w)
         else:
-            self._add(self._system(t))
+            pass  # ignore other system lines
 
-    # bubbles render instantly, so "instant" == normal append
     def append_log_instant(self, text: str) -> None:
         self.append_log(text)
 
-    def update_aria_stream(self, body: str) -> None:
+    def update_neo_stream(self, body: str) -> None:
         if not body:
             return
-        if self._stream_bubble is None:
-            self._stream_bubble = _Bubble(body, "aria")
-            self._add(_row(self._stream_bubble, "aria"))
+        if self._stream_msg is None:
+            self._maybe_stamp()
+            self._stream_msg = _AiMessage(body, show_actions=False, streaming=True)
+            self._add(_ai_row(self._stream_msg))
         else:
-            self._stream_bubble.set_text(body)
-            self._scroll_bottom()
+            self._stream_msg.set_text(body)
+        self._scroll_debounce.start()
 
-    def end_aria_stream(self, body: str, formatted=None) -> None:
-        text = (formatted if formatted is not None else body or "").strip()
-        if self._stream_bubble is not None:
+    def end_neo_stream(self, body: str, formatted=None) -> None:
+        # Always render the raw model text — ChatView parses code/cmd blocks itself.
+        text = (body or "").strip()
+        if self._stream_msg is not None:
             if text:
-                self._stream_bubble.set_text(text)
-            self._stream_bubble = None
+                parent = self._stream_msg.parentWidget()
+                if parent:
+                    idx = self._lay.indexOf(parent)
+                    if idx >= 0:
+                        self._lay.removeWidget(parent)
+                        parent.deleteLater()
+                self._stream_msg = None
+                self._add_ai(text)
+            else:
+                self._stream_msg = None
         elif text:
-            self._add(_row(_Bubble(text, "aria"), "aria"))
-        self._scroll_bottom()
+            self._add_ai(text)
+        if text:
+            self._save_history("model", text)
+        QTimer.singleShot(50, self._scroll_bottom)
+
+    def clear_view(self) -> None:
+        self._stream_msg = None
+        self._last_user = ""
+        self._last_tool_status = ""
+        self._last_stamp_day = None
+        while self._lay.count() > 1:
+            item = self._lay.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self._empty = _EmptyState()
+        self._lay.insertWidget(0, self._empty)
+        self._empty.show()

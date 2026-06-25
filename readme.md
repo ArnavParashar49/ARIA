@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/icon.png" width="120" alt="ARIA"/>
+<img src="assets/icon.png" width="120" alt="NEO"/>
 
-# ARIA
+# NEO
 
 **A real-time, voice-first AI companion that lives in your menu bar — hears, sees, remembers, and controls your computer.**
 
@@ -17,11 +17,11 @@ Powered by Gemini Live · runs locally · cross-platform · zero subscriptions
 
 ---
 
-## What is ARIA?
+## What is NEO?
 
-ARIA is a personal AI assistant that sits quietly in your menu bar as a cyan pixel-robot. Simply click it or say **"Hey Aria"** to initiate a seamless, real-time voice conversation. Through natural dialogue, ARIA can manage your files, control your applications, interpret your screen and webcam, search the web, manage emails, and autonomously execute complex multi-step goals.
+NEO is a personal AI assistant that sits quietly in your menu bar as a cyan pixel-robot. Simply click it or say **"Hey Neo"** to initiate a seamless, real-time voice conversation. Through natural dialogue, NEO can manage your files, control your applications, interpret your screen and webcam, search the web, manage emails, and autonomously execute complex multi-step goals.
 
-Operating locally on your machine with your own free Gemini API key, ARIA ensures full privacy with no cloud dependencies, subscriptions, or telemetry.
+Operating locally on your machine with your own free Gemini API key, NEO ensures full privacy with no cloud dependencies, subscriptions, or telemetry.
 
 ---
 
@@ -31,7 +31,7 @@ Operating locally on your machine with your own free Gemini API key, ARIA ensure
 |---|---|
 | 🤖 **Desktop buddy** | A pixel-robot that lives in the menu bar. Click to summon, click to tuck away — hover and click animations included. |
 | 🎙️ **Real-time voice** | Ultra-low-latency spoken conversation via Gemini Live, in any language. |
-| 🗣️ **"Hey Aria" wake word** | Fully local wake-word + double-clap detection (Vosk) — no audio leaves your machine to listen. |
+| 🗣️ **"Hey Neo" wake word** | Fully local wake-word + double-clap detection (Vosk) — no audio leaves your machine to listen. |
 | 👁️ **Sees your world** | Reads your screen and webcam on demand. On-device object & face detection (YOLOv8 + DeepFace). |
 | 🧠 **Persistent memory** | Remembers your projects, preferences, contacts, and people across sessions. |
 | 🛠️ **Controls your computer** | Launch apps, manage files, run commands, control the browser, adjust system settings, generate presentations. |
@@ -44,34 +44,34 @@ Operating locally on your machine with your own free Gemini API key, ARIA ensure
 
 ## 🚀 Installation
 
-Run the single-line command for your platform in your terminal to automatically download, install, and start ARIA.
+Run the single-line command for your platform in your terminal to automatically download, install, and start NEO.
 
 ### macOS / Linux
 ```bash
-curl -sSL https://raw.githubusercontent.com/ArnavParashar49/ARIA/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/ArnavParashar49/NEO/main/install.sh | bash
 ```
 
 ### Windows
 ```powershell
-iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/ArnavParashar49/ARIA/main/install.ps1'))
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/ArnavParashar49/NEO/main/install.ps1'))
 ```
 
-> **Note:** On your first launch, ARIA will prompt you to enter your Gemini API key (from [aistudio.google.com](https://aistudio.google.com)). She will also download a small (~40 MB) local speech model for the wake word, and vision weights (`yolov8n.pt`) if missing. 
+> **Note:** On your first launch, NEO will prompt you to enter your Gemini API key (from [aistudio.google.com](https://aistudio.google.com)). She will also download a small (~40 MB) local speech model for the wake word, and vision weights (`yolov8n.pt`) if missing. 
 
 ---
 
 ## 🗑️ Uninstallation
 
-To completely remove ARIA and her background services from your system:
+To completely remove NEO and her background services from your system:
 
 ### macOS / Linux
 ```bash
-curl -sSL https://raw.githubusercontent.com/ArnavParashar49/ARIA/main/uninstall.sh | bash
+curl -sSL https://raw.githubusercontent.com/ArnavParashar49/NEO/main/uninstall.sh | bash
 ```
 
 ### Windows
 ```powershell
-iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/ArnavParashar49/ARIA/main/uninstall.ps1'))
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/ArnavParashar49/NEO/main/uninstall.ps1'))
 ```
 
 ---
@@ -84,7 +84,7 @@ Everything lives in `config/api_keys.json` (gitignored — your key never leaves
 |---|---|---|
 | `gemini_api_key` | — | Your free key from [aistudio.google.com](https://aistudio.google.com) |
 | `os_system` | `auto` | OS detection — leave on `auto` |
-| `autonomous_mode` | `true` | Let ARIA plan & execute multi-step goals on its own ([details](AUTONOMOUS.md)) |
+| `autonomous_mode` | `true` | Let NEO plan & execute multi-step goals on its own ([details](AUTONOMOUS.md)) |
 | `local_vision` / `yolo_enabled` | `true` | On-device screen/webcam object detection (YOLOv8) |
 | `face_recognition_enabled` | `true` | Recognize people you've introduced ([privacy](VISION_PRIVACY.md)) |
 | `siri_bar` | `top-right` | Where the buddy docks (corner + margins) |
@@ -96,7 +96,7 @@ Everything lives in `config/api_keys.json` (gitignored — your key never leaves
 ## 🔒 Privacy
 
 - Your API key and personal memory (`config/api_keys.json`, `memory/`) are **gitignored** and stay strictly local.
-- Wake-word listening is **fully on-device** — audio is only sent to Gemini *after* you actively summon ARIA.
+- Wake-word listening is **fully on-device** — audio is only sent to Gemini *after* you actively summon NEO.
 - Vision runs locally (YOLOv8 + DeepFace). See **[VISION_PRIVACY.md](VISION_PRIVACY.md)** for what's processed and stored.
 
 ---
@@ -117,9 +117,9 @@ Everything lives in `config/api_keys.json` (gitignored — your key never leaves
 
 ## 🩺 Troubleshooting
 
-- **macOS: `Operation not permitted` reading `.venv`** — This occurs if installed in a TCC-protected folder. **Ensure ARIA is installed outside of `~/Downloads`, `~/Desktop`, and `~/Documents`** (e.g., `~/.aria`).
+- **macOS: `Operation not permitted` reading `.venv`** — This occurs if installed in a TCC-protected folder. **Ensure NEO is installed outside of `~/Downloads`, `~/Desktop`, and `~/Documents`** (e.g., `~/.aria`).
 - **No microphone / "wake word disabled"** — Grant Microphone permission in your OS Settings → Privacy, then relaunch.
-- **"Hey Aria" not triggering** — Speak it naturally as one connected phrase. A double-clap serves as a reliable fallback.
+- **"Hey Neo" not triggering** — Speak it naturally as one connected phrase. A double-clap serves as a reliable fallback.
 - **`playwright` errors** — Run `playwright install` manually if the automated installation failed.
 
 ---
@@ -134,6 +134,6 @@ Personal and non-commercial use only — **[Creative Commons BY-NC 4.0](https://
 
 Built by **AP** — your real-world personal AI assistant.
 
-⭐ **Star the repo if ARIA helps you.**
+⭐ **Star the repo if NEO helps you.**
 
 </div>

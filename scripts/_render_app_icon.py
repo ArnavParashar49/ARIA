@@ -1,4 +1,4 @@
-"""Render ARIA's .app icon: the cyan robot centered on a rounded dark tile.
+"""Render NEO's .app icon: the cyan robot centered on a rounded dark tile.
 
 Usage: python scripts/_render_app_icon.py OUT.png [size]
 """
@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 
 def main() -> None:
-    out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/aria_icon.png"
+    out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/neo_icon.png"
     size = int(sys.argv[2]) if len(sys.argv) > 2 else 1024
 
     app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841

@@ -250,7 +250,7 @@ def _download_curl(url: str, dest_dir: Path) -> str:
     if not curl:
         return "FAILED: curl not found."
 
-    out_tpl = str(dest_dir / "aria_download")
+    out_tpl = str(dest_dir / "neo_download")
     cmd = [
         curl, "-fL", "--retry", "2", "--connect-timeout", "20",
         "-A", _USER_AGENT, "-o", out_tpl, url,
@@ -269,7 +269,7 @@ def _download_curl(url: str, dest_dir: Path) -> str:
             )
 
         name = _filename_from_url(url)
-        if name and name != "aria_download":
+        if name and name != "neo_download":
             final = dest_dir / name
             if final.exists():
                 final = dest_dir / _unique_name(dest_dir, name)
@@ -395,24 +395,21 @@ def _looks_like_app_install(query: str) -> bool:
 
 
 def _native_app_download(query: str) -> str:
-    """Fallback: open Google + official page in the user's normal Chrome."""
+    """Fallback: open search + official page in the user's normal browser."""
     from actions.browser_native import navigate_user_browser
+    from config import search_engine_url
 
     app = _normalize_app_query(query)
     if not app:
         return "FAILED: Which app should I download?"
 
+    # Dynamic search first — no hardcoded truth table
+    official = None
     try:
-        from actions.browser_control import _OFFICIAL_APP_URLS
+        from actions.browser_control import _app_download_hint
+        official = _app_download_hint(app)
     except ImportError:
-        _OFFICIAL_APP_URLS = {}
-
-    official = _OFFICIAL_APP_URLS.get(app.lower())
-    if not official:
-        for name, url in _OFFICIAL_APP_URLS.items():
-            if app.lower().replace(" ", "") == name.replace(" ", ""):
-                official = url
-                break
+        pass
 
     if not official:
         app_c = app.lower().replace(" ", "")
@@ -425,16 +422,16 @@ def _native_app_download(query: str) -> str:
                 official = url
                 break
 
-    search_url = "https://www.google.com/search?q=" + quote_plus(f"download {app}")
+    search_url = search_engine_url(f"download {app}")
     navigate_user_browser(search_url)
     if official:
         navigate_user_browser(official)
         return (
-            f"Opened Google and {official} in your browser. "
+            f"Opened search and {official} in your browser. "
             "Click the Download button — the installer will go to Downloads."
         )
     return (
-        f"Opened Google search for 'download {app}'. "
+        f"Opened search for 'download {app}'. "
         "Click the official site link, then Download."
     )
 

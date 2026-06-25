@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # Singleton client instance
 _chroma_client = None
 _collection = None
-_COLLECTION_NAME = "aria_memory"
+_COLLECTION_NAME = "neo_memory"
 
 def _init_db():
     """Initializes the ChromaDB persistent client and collection."""
@@ -116,6 +116,51 @@ def retrieve_relevant_memory(query: str, top_k: int = 5, category: str = None) -
         logger.error(f"[MemoryRAG] Failed to retrieve memory: {e}")
         return []
 
+def _format_memories_block(
+    memories: list[dict[str, Any]],
+    *,
+    compact: bool = True,
+) -> str:
+    """Format a list of memory dicts into a prompt-ready block."""
+    if not memories:
+        return ""
+
+    formatted = "--- NEO'S MEMORIES ---\n"
+    formatted += (
+        "You have stored knowledge about this user. Use it proactively.\n\n"
+    )
+
+    priority_cats = {"preference", "user_info", "contact"}
+    memories = sorted(
+        memories,
+        key=lambda m: (
+            0 if (m.get("metadata", {}).get("category", "")) in priority_cats
+            else 1,
+        ),
+    )
+
+    count = 0
+    for mem in memories:
+        if compact and mem.get("distance", 0.0) > 1.8:
+            continue
+        cat = mem.get("metadata", {}).get("category", "general")
+        content = mem.get("content", "")
+        if not content or not content.strip():
+            continue
+        formatted += f"- [{cat}] {content.strip()}\n"
+        count += 1
+        if count >= 30:
+            break
+
+    if count == 0:
+        return ""
+
+    formatted += (
+        f"\n(NOTE: {count} memories stored.)\n"
+    )
+    return formatted
+
+
 def format_memory_for_prompt(query: str, top_k: int = 5) -> str:
     """
     Convenience method to retrieve and format memories into a text block for LLM prompts.
@@ -126,7 +171,8 @@ def format_memory_for_prompt(query: str, top_k: int = 5) -> str:
         
     formatted = "--- RELEVANT PAST MEMORIES ---\n"
     for mem in memories:
-        if mem["distance"] > 1.8: # Increased threshold because L2 distance can be >1.0
+        # Cosine distance: 0 = identical, 2 = opposite; threshold ~1.8 filters dissimilar
+        if mem["distance"] > 1.8:
             continue
         formatted += f"- [{mem['metadata'].get('category', 'general')}]: {mem['content']}\n"
     formatted += "------------------------------\n"

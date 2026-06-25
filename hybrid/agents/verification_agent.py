@@ -13,6 +13,35 @@ class VerificationAgent(BaseAgent):
         return task.mode.value == "planned" or "verify" in task.context
 
     def run(self, task: AgentTask, ctx: ExecutionContext) -> ToolResult:
+        import os
+        import subprocess
+
+        # If there's code to verify, test it in the sandbox
+        code_to_verify = task.context.get("code_to_verify")
+        if code_to_verify:
+            from core.paths import base_dir
+
+            sandbox_dir = str(base_dir() / "sandbox")
+            os.makedirs(sandbox_dir, exist_ok=True)
+            test_file = os.path.join(sandbox_dir, "test_script.py")
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write(code_to_verify)
+            
+            try:
+                result = subprocess.run(
+                    ["python", test_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    cwd=sandbox_dir
+                )
+                if result.returncode != 0:
+                    self.emit("agent_handoff", {"status": "error", "error": f"Verification failed:\n{result.stderr}"})
+                    return ToolResult(ok=False, text=f"Code failed in sandbox: {result.stderr}", tool_name="verify")
+                return ToolResult(ok=True, text=f"Code passed sandbox execution: {result.stdout}", tool_name="verify")
+            except subprocess.TimeoutExpired:
+                return ToolResult(ok=False, text="Code execution timed out in sandbox", tool_name="verify")
+
         results = task.step_results
         if not results:
             return ToolResult(ok=False, text="No step results to verify.", tool_name="verify")

@@ -20,9 +20,6 @@ _SYSTEM_TOOLS = frozenset({
     "notes_control",
     "calendar_control",
     "reminder",
-    "code_helper",
-    "dev_agent",
-    "project_builder",
     "browser_control",
     "download_control",
 })

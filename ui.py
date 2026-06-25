@@ -21,9 +21,9 @@ from PySide6.QtGui import (
     QRadialGradient, QShortcut, QTextCharFormat, QTextCursor,
 )
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QPushButton, QScrollArea, QSizePolicy, QTextEdit,
-    QVBoxLayout, QWidget, QProgressBar,
+    QApplication, QFileDialog, QFrame, QGraphicsDropShadowEffect, QGridLayout,
+    QHBoxLayout, QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea,
+    QSizePolicy, QTextEdit, QVBoxLayout, QWidget, QProgressBar, QMenu,
 )
 
 def _base_dir() -> Path:
@@ -35,8 +35,8 @@ BASE_DIR   = _base_dir()
 CONFIG_DIR = BASE_DIR / "config"
 API_FILE   = CONFIG_DIR / "api_keys.json"
 
-_DEFAULT_W, _DEFAULT_H = 440, 400
-_MIN_W,     _MIN_H     = 360, 280
+_DEFAULT_W, _DEFAULT_H = 440, 520
+_MIN_W,     _MIN_H     = 400, 460
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 _UI_FONT_FAMILY = ".AppleSystemUIFont" if _OS == "Darwin" else "Segoe UI"
@@ -48,18 +48,21 @@ from ui_theme import (
     RADIUS_S,
     _MONO_FONT,
     command_input_drag_stylesheet,
-    command_input_stylesheet,
     embed_panel_stylesheet,
     expanded_shell_stylesheet,
+    ghost_action_button_stylesheet,
+    header_icon_button_stylesheet,
     icon_button_stylesheet,
+    input_container_stylesheet,
     log_widget_stylesheet,
     mono_font,
+    panel_card_stylesheet,
+    pill_toolbar_button_stylesheet,
     primary_button_stylesheet,
     progress_bar_stylesheet,
     qcol,
     ui_font,
 )
-from actions.list_format import format_list_for_log as _format_list_for_log
 from ui_panel import ChatView
 
 
@@ -79,30 +82,30 @@ class LogWidget(QTextEdit):
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._sig.connect(self._enqueue)
-        self._aria_stream_active = False
-        self._aria_stream_start = 0
+        self._neo_stream_active = False
+        self._neo_stream_start = 0
 
     def _ai_fmt(self, cur: QTextCursor):
         fmt = cur.charFormat()
         fmt.setForeground(QBrush(qcol(C.AI)))
         return fmt
 
-    def begin_aria_stream(self):
-        self._aria_stream_active = True
+    def begin_neo_stream(self):
+        self._neo_stream_active = True
         cur = self.textCursor()
         cur.movePosition(cur.MoveOperation.End)
-        self._aria_stream_start = cur.position()
-        cur.insertText("Aria: ", self._ai_fmt(cur))
-        self._aria_stream_start = cur.position()
+        self._neo_stream_start = cur.position()
+        cur.insertText("Neo: ", self._ai_fmt(cur))
+        self._neo_stream_start = cur.position()
         self.setTextCursor(cur)
 
-    def update_aria_stream(self, body: str):
+    def update_neo_stream(self, body: str):
         if not body:
             return
-        if not self._aria_stream_active:
-            self.begin_aria_stream()
+        if not self._neo_stream_active:
+            self.begin_neo_stream()
         cur = self.textCursor()
-        cur.setPosition(self._aria_stream_start)
+        cur.setPosition(self._neo_stream_start)
         cur.movePosition(
             cur.MoveOperation.End,
             cur.MoveMode.KeepAnchor,
@@ -112,14 +115,14 @@ class LogWidget(QTextEdit):
         self.setTextCursor(cur)
         self.ensureCursorVisible()
 
-    def end_aria_stream(self, body: str, formatted: str | None = None):
-        if not self._aria_stream_active:
+    def end_neo_stream(self, body: str, formatted: str | None = None):
+        if not self._neo_stream_active:
             if body:
-                self.append_log_instant(f"Aria: {formatted or body}")
+                self.append_log_instant(f"Neo: {formatted or body}")
             return
         text = (formatted if formatted is not None else body).strip()
         cur = self.textCursor()
-        cur.setPosition(self._aria_stream_start)
+        cur.setPosition(self._neo_stream_start)
         cur.movePosition(
             cur.MoveOperation.End,
             cur.MoveMode.KeepAnchor,
@@ -130,7 +133,7 @@ class LogWidget(QTextEdit):
         cur.insertText("\n", self._ai_fmt(cur))
         self.setTextCursor(cur)
         self.ensureCursorVisible()
-        self._aria_stream_active = False
+        self._neo_stream_active = False
 
     def append_log(self, text: str):
         self._sig.emit(text)
@@ -140,7 +143,7 @@ class LogWidget(QTextEdit):
         tl = text.lower()
         if tl.startswith("you:"):
             tag = "you"
-        elif tl.startswith("aria:"):
+        elif tl.startswith("neo:"):
             tag = "ai"
         else:
             tag = "sys"
@@ -173,7 +176,7 @@ class LogWidget(QTextEdit):
         self._pos    = 0
         tl = self._text.lower()
         if   tl.startswith("you:"):    self._tag = "you"
-        elif tl.startswith("aria:"): self._tag = "ai"
+        elif tl.startswith("neo:"): self._tag = "ai"
         elif tl.startswith("file:"):   self._tag = "file"
         elif "err" in tl:              self._tag = "err"
         else:                          self._tag = "sys"
@@ -251,17 +254,60 @@ _FILE_DIALOG_FILTER = (
 )
 
 
+class ChatInputBox(QTextEdit):
+    returnPressed = Signal()
+    focusChanged = Signal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptRichText(False)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Give it a baseline size so it matches the old QLineEdit
+        self.setFixedHeight(40)
+        self.textChanged.connect(self._adjust_height)
+
+    def _adjust_height(self):
+        doc_height = int(self.document().size().height())
+        new_h = min(120, max(40, doc_height + 12))
+        self.setFixedHeight(new_h)
+        if doc_height > 108:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        else:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key.Key_Return or e.key() == Qt.Key.Key_Enter:
+            if e.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Insert newline
+                super().keyPressEvent(e)
+                # optionally adjust height here
+            else:
+                self.returnPressed.emit()
+                e.accept()
+                return
+        else:
+            super().keyPressEvent(e)
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        self.focusChanged.emit(True)
+
+    def focusOutEvent(self, e):
+        super().focusOutEvent(e)
+        self.focusChanged.emit(False)
+
+
 class CommandBar(QWidget):
     """Command input with attach and drag-and-drop."""
 
     file_selected = Signal(str)
+    reset_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self._current_file: str | None = None
-        self._input_style = command_input_stylesheet()
-        self._input_drag_style = command_input_drag_stylesheet()
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -269,49 +315,141 @@ class CommandBar(QWidget):
 
         self._file_chip = QLabel("")
         self._file_chip.setStyleSheet(f"""
-            color: {C.GREEN};
-            background: rgba(110, 231, 160, 0.12);
-            border: 1px solid rgba(110, 231, 160, 0.35);
+            color: {C.BLUE_L};
+            background: rgba(59, 130, 246, 0.10);
+            border: 1px solid rgba(59, 130, 246, 0.28);
             border-radius: {RADIUS_S}px;
-            padding: 6px 10px;
-            {ui_font(11)}
+            padding: 5px 12px;
+            {ui_font(10)}
         """)
         self._file_chip.setVisible(False)
         self._file_chip.setCursor(Qt.CursorShape.PointingHandCursor)
         self._file_chip.mouseReleaseEvent = self._chip_clicked
         root.addWidget(self._file_chip)
 
-        row = QHBoxLayout()
-        row.setSpacing(8)
+        self._pill_frame = QFrame()
+        self._pill_frame.setObjectName("inputContainer")
+        self._pill_frame.setStyleSheet(input_container_stylesheet(focused=False))
 
-        attach = QPushButton("＋")
-        attach.setFixedSize(40, 40)
+        pill_layout = QHBoxLayout(self._pill_frame)
+        pill_layout.setContentsMargins(16, 4, 8, 4)
+        pill_layout.setSpacing(6)
+
+        self.line_edit = ChatInputBox()
+        self.line_edit.setPlaceholderText("Ask AI anything…")
+        self.line_edit.setFont(QFont(_UI_FONT_FAMILY, 12))
+        self.line_edit.setStyleSheet(f"""
+            QTextEdit {{
+                background: transparent;
+                color: {C.TEXT};
+                border: none;
+                padding: 6px 0px;
+            }}
+        """)
+        self.line_edit.focusChanged.connect(self._on_focus_changed)
+        pill_layout.addWidget(self.line_edit, stretch=1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(4)
+        btn_row.setContentsMargins(0, 0, 0, 0)
+
+        attach = QPushButton("@")
+        attach.setFixedSize(30, 30)
         attach.setToolTip("Attach a file")
         attach.setCursor(Qt.CursorShape.PointingHandCursor)
-        attach.setStyleSheet(self._icon_btn_style())
+        attach.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                color: {C.TEXT_MED};
+                border: none;
+                border-radius: 15px;
+                {ui_font(13)}
+            }}
+            QPushButton:hover {{ color: {C.BLUE_L}; }}
+        """)
         attach.clicked.connect(self._browse)
-        row.addWidget(attach)
-
-        self.line_edit = QLineEdit()
-        self.line_edit.setPlaceholderText("Message ARIA…")
-        self.line_edit.setFont(QFont(_UI_FONT_FAMILY, 13))
-        self.line_edit.setFixedHeight(40)
-        self.line_edit.setStyleSheet(self._input_style)
-        row.addWidget(self.line_edit, stretch=1)
+        btn_row.addWidget(attach)
 
         send = QPushButton("↑")
-        send.setFixedSize(40, 40)
-        send.setFont(QFont(_UI_FONT_FAMILY, 16, QFont.Weight.Bold))
+        send.setFixedSize(32, 32)
+        send.setFont(QFont(_UI_FONT_FAMILY, 14, QFont.Weight.Bold))
         send.setCursor(Qt.CursorShape.PointingHandCursor)
-        send.setStyleSheet(primary_button_stylesheet())
+        send.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.BLUE};
+                color: #ffffff;
+                border: none;
+                border-radius: 16px;
+            }}
+            QPushButton:hover {{ background: {C.BLUE_L}; }}
+            QPushButton:pressed {{ background: {C.BLUE_D}; }}
+        """)
         send.clicked.connect(self.line_edit.returnPressed.emit)
-        row.addWidget(send)
+        btn_row.addWidget(send)
 
-        root.addLayout(row)
+        pill_layout.addLayout(btn_row)
+        root.addWidget(self._pill_frame)
 
     @staticmethod
     def _icon_btn_style() -> str:
         return icon_button_stylesheet()
+
+    def _get_util_button_style(self) -> str:
+        return f"""
+            QPushButton {{
+                background: rgba(255, 255, 255, 0.04);
+                color: {C.TEXT_MED};
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 12px;
+                padding: 4px 10px;
+                {ui_font(10)}
+            }}
+            QPushButton::menu-indicator {{
+                image: none;
+                width: 0px;
+            }}
+            QPushButton:hover {{
+                background: rgba(255, 255, 255, 0.08);
+                color: {C.TEXT};
+                border: 1px solid rgba(255, 255, 255, 0.16);
+            }}
+            QPushButton:pressed {{
+                background: rgba(255, 255, 255, 0.12);
+            }}
+        """
+
+    def _get_menu_style(self) -> str:
+        return f"""
+            QMenu {{
+                background: {C.SURFACE};
+                color: {C.TEXT};
+                border: 1px solid rgba(255, 255, 255, 0.08);
+                border-radius: 8px;
+                padding: 4px 0px;
+            }}
+            QMenu::item {{
+                padding: 6px 16px;
+                background: transparent;
+            }}
+            QMenu::item:selected {{
+                background: rgba(255, 255, 255, 0.06);
+                color: {C.TEXT};
+            }}
+        """
+
+    def _get_container_style(self, focused: bool = False, dragging: bool = False) -> str:
+        return input_container_stylesheet(focused=focused, dragging=dragging)
+
+    def _on_focus_changed(self, focused: bool):
+        self._pill_frame.setStyleSheet(
+            input_container_stylesheet(focused=focused)
+        )
+
+    def set_input_placeholder(self, text: str):
+        self.line_edit.setPlaceholderText(text)
+
+    def _change_agent(self, agent_name: str):
+        self._agent_btn.setText(f"👤 {agent_name}  ▾")
 
     def current_file(self) -> str | None:
         return self._current_file
@@ -327,7 +465,7 @@ class CommandBar(QWidget):
 
     def _browse(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Attach a file for ARIA", str(Path.home()), _FILE_DIALOG_FILTER,
+            self, "Attach a file for NEO", str(Path.home()), _FILE_DIALOG_FILTER,
         )
         if path:
             self._set_file(path)
@@ -355,13 +493,15 @@ class CommandBar(QWidget):
     def dragEnterEvent(self, e: QDragEnterEvent):
         if self._pick_file_from_mime(e.mimeData()):
             e.acceptProposedAction()
-            self.line_edit.setStyleSheet(self._input_drag_style)
+            self._pill_frame.setStyleSheet(
+                input_container_stylesheet(focused=True, dragging=True)
+            )
 
     def dragLeaveEvent(self, e):
-        self.line_edit.setStyleSheet(self._input_style)
+        self._pill_frame.setStyleSheet(input_container_stylesheet(focused=False))
 
     def dropEvent(self, e: QDropEvent):
-        self.line_edit.setStyleSheet(self._input_style)
+        self._pill_frame.setStyleSheet(input_container_stylesheet(focused=False))
         path = self._pick_file_from_mime(e.mimeData())
         if path:
             self._set_file(path)
@@ -376,8 +516,8 @@ class SetupOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
             SetupOverlay {{
-                background: #181d1c;
-                border: 1px solid #2c3a38;
+                background: {C.BG};
+                border: 1px solid rgba(255, 255, 255, 0.06);
                 border-radius: 18px;
             }}
         """)
@@ -395,7 +535,7 @@ class SetupOverlay(QWidget):
                  align=Qt.AlignmentFlag.AlignCenter):
             w = QLabel(txt)
             w.setAlignment(align)
-            w.setFont(QFont("Courier New", font_size,
+            w.setFont(QFont(_UI_FONT_FAMILY, font_size,
                             QFont.Weight.Bold if bold else QFont.Weight.Normal))
             w.setStyleSheet(f"color: {color}; background: transparent;")
             return w
@@ -407,7 +547,7 @@ class SetupOverlay(QWidget):
         _avrow = QHBoxLayout()
         _avrow.addStretch(1); _avrow.addWidget(_av); _avrow.addStretch(1)
         layout.addLayout(_avrow)
-        layout.addWidget(_lbl("Let's set up ARIA", 15, True))
+        layout.addWidget(_lbl("Let's set up NEO", 15, True))
         layout.addWidget(_lbl("Add your Gemini key and you're ready to go.", 9, color=C.PRI_DIM))
         layout.addSpacing(6)
 
@@ -420,14 +560,14 @@ class SetupOverlay(QWidget):
         self._key_input = QLineEdit()
         self._key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self._key_input.setPlaceholderText("AIza…")
-        self._key_input.setFont(QFont("Courier New", 15))
-        self._key_input.setFixedHeight(32)
+        self._key_input.setFont(QFont(_UI_FONT_FAMILY, 12))
+        self._key_input.setFixedHeight(36)
         self._key_input.setStyleSheet(f"""
             QLineEdit {{
-                background: #222b2a; color: {C.TEXT};
-                border: 1px solid #2c3a38; border-radius: 10px; padding: 6px 10px;
+                background: {C.SURFACE2}; color: {C.TEXT};
+                border: 1px solid rgba(255, 255, 255, 0.10); border-radius: 12px; padding: 8px 12px;
             }}
-            QLineEdit:focus {{ border: 1px solid #22a89c; }}
+            QLineEdit:focus {{ border: 2px solid {C.BLUE}; }}
         """)
         layout.addWidget(self._key_input)
         layout.addSpacing(12)
@@ -446,8 +586,8 @@ class SetupOverlay(QWidget):
         self._os_btns: dict[str, QPushButton] = {}
         for key, label in [("windows","⊞  Windows"),("mac","  macOS"),("linux","🐧  Linux")]:
             btn = QPushButton(label)
-            btn.setFont(QFont("Courier New", 14, QFont.Weight.Bold))
-            btn.setFixedHeight(32)
+            btn.setFont(QFont(_UI_FONT_FAMILY, 11))
+            btn.setFixedHeight(34)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.clicked.connect(lambda _, k=key: self._sel(k))
             os_row.addWidget(btn)
@@ -456,18 +596,11 @@ class SetupOverlay(QWidget):
         self._sel(detected)
         layout.addSpacing(12)
 
-        init_btn = QPushButton("Start ARIA  ▸")
-        init_btn.setFont(QFont("Courier New", 15, QFont.Weight.Bold))
-        init_btn.setFixedHeight(40)
+        init_btn = QPushButton("Start NEO  ↑")
+        init_btn.setFont(QFont(_UI_FONT_FAMILY, 12, QFont.Weight.Bold))
+        init_btn.setFixedHeight(42)
         init_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        init_btn.setStyleSheet("""
-            QPushButton {
-                background: #22a89c; color: #07201c;
-                border: none; border-radius: 12px;
-            }
-            QPushButton:hover { background: #6fe3d6; }
-            QPushButton:pressed { background: #178a80; }
-        """)
+        init_btn.setStyleSheet(primary_button_stylesheet())
         init_btn.clicked.connect(self._submit)
         layout.addWidget(init_btn)
 
@@ -477,17 +610,17 @@ class SetupOverlay(QWidget):
             if k == key:
                 btn.setStyleSheet("""
                     QPushButton {
-                        background: #22a89c; color: #07201c;
+                        background: #3b82f6; color: #ffffff;
                         border: none; border-radius: 10px; font-weight: bold;
                     }
                 """)
             else:
                 btn.setStyleSheet(f"""
                     QPushButton {{
-                        background: #222b2a; color: {C.TEXT_DIM};
-                        border: 1px solid #2c3a38; border-radius: 10px;
+                        background: {C.SURFACE}; color: {C.TEXT_DIM};
+                        border: 1px solid rgba(255,255,255,0.08); border-radius: 10px;
                     }}
-                    QPushButton:hover {{ color: {C.TEXT}; border: 1px solid #3d514e; }}
+                    QPushButton:hover {{ color: {C.TEXT}; border: 1px solid rgba(255,255,255,0.14); }}
                 """)
 
     def _submit(self):
@@ -516,17 +649,19 @@ class _FooterStrip(QWidget):
 class MainWindow(QMainWindow):
     _log_sig    = Signal(str)
     _state_sig  = Signal(str)
-    _progress_start_sig = Signal(int)
+    _progress_start_sig = Signal(int, str)
     _progress_stop_sig  = Signal()
-    _aria_stream_sig    = Signal(str)
-    _aria_stream_end_sig = Signal(str, object)
+    _neo_stream_sig    = Signal(str)
+    _neo_stream_end_sig = Signal(str, object)
+    _tool_block_sig = Signal(str, str)
     panel_collapse_requested = Signal()
 
     def __init__(self, face_path: str = ""):
         super().__init__()
-        self.setObjectName("ariaExpandedShell")
+        self.setObjectName("neoExpandedShell")
         self.setStyleSheet(expanded_shell_stylesheet())
-        self.setWindowTitle("ARIA")
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.Tool)
+        self.setWindowTitle("NEO")
         self.setMinimumSize(_MIN_W, _MIN_H)
         self.resize(_DEFAULT_W, _DEFAULT_H)
 
@@ -546,20 +681,33 @@ class MainWindow(QMainWindow):
         self._email_capture   = None  # holder dict while awaiting a typed email address
 
         central = QWidget()
-        central.setObjectName("ariaExpandedShell")
+        central.setObjectName("neoExpandedShell")
         central.setStyleSheet(expanded_shell_stylesheet())
         self.setCentralWidget(central)
 
-        root = QVBoxLayout(central)
-        root.setContentsMargins(14, 14, 14, 12)
-        root.setSpacing(10)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self._card = QFrame()
+        self._card.setObjectName("neoPanelCard")
+        self._card.setStyleSheet(panel_card_stylesheet())
+        shadow = QGraphicsDropShadowEffect(self._card)
+        shadow.setBlurRadius(48)
+        shadow.setOffset(0, 8)
+        shadow.setColor(qcol("#000000", 120))
+        self._card.setGraphicsEffect(shadow)
+
+        root = QVBoxLayout(self._card)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
         root.addWidget(self._build_header())
         root.addWidget(self._build_main_panel(), stretch=1)
-        root.addWidget(self._build_footer())
+        outer.addWidget(self._card)
 
         self._log_sig.connect(self._log.append_log)
-        self._aria_stream_sig.connect(self._log.update_aria_stream)
-        self._aria_stream_end_sig.connect(self._on_aria_stream_end)
+        self._tool_block_sig.connect(self._log.append_tool_block)
+        self._neo_stream_sig.connect(self._log.update_neo_stream)
+        self._neo_stream_end_sig.connect(self._on_neo_stream_end)
         self._state_sig.connect(self._apply_state)
         self._progress_start_sig.connect(self._start_search_progress)
         self._progress_stop_sig.connect(self._stop_search_progress)
@@ -575,7 +723,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._overlay and self._overlay.isVisible():
-            ow, oh = min(400, self.width() - 24), min(300, self.height() - 24)
+            ow, oh = min(400, self.width() - 24), min(450, self.height() - 24)
             cw = self.centralWidget()
             self._overlay.setGeometry(
                 (cw.width()  - ow) // 2,
@@ -584,56 +732,34 @@ class MainWindow(QMainWindow):
             )
 
     def _build_header(self) -> QWidget:
-        from ui_buddy import PixelBuddy
-        w = QWidget()
+        w = QFrame()
+        w.setStyleSheet("QFrame { background: transparent; border: none; }")
+        w.setFixedHeight(32)
         lay = QHBoxLayout(w)
-        lay.setContentsMargins(6, 2, 6, 2)
-        lay.setSpacing(11)
-
-        avatar = PixelBuddy()
-        avatar.setFixedSize(64, 64)
-        avatar.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        lay.addWidget(avatar)
-
-        tcol = QVBoxLayout()
-        tcol.setSpacing(2)
-        tcol.setContentsMargins(0, 0, 0, 0)
-        title = QLabel("ARIA")
-        title.setStyleSheet(
-            f"color: {C.TEXT}; background: transparent; letter-spacing: 2px; {ui_font(15, bold=True)}"
-        )
-        tcol.addWidget(title)
-
-        srow = QHBoxLayout()
-        srow.setSpacing(5)
-        srow.setContentsMargins(0, 0, 0, 0)
-        self._status_dot = QLabel("●")
-        self._status_dot.setStyleSheet(
-            f"color: {C.TEXT_MED}; background: transparent; font-size: 9pt;"
-        )
-        srow.addWidget(self._status_dot)
-        self._status_lbl = QLabel("Starting…")
-        self._status_lbl.setStyleSheet(
-            f"color: {C.TEXT_DIM}; background: transparent; {ui_font(10)}"
-        )
-        srow.addWidget(self._status_lbl)
-        srow.addStretch()
-        tcol.addLayout(srow)
-
-        lay.addLayout(tcol)
+        lay.setContentsMargins(6, 4, 8, 0)
+        lay.setSpacing(0)
         lay.addStretch()
+
+        btn = QPushButton("✕")
+        btn.setFixedSize(28, 28)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(header_icon_button_stylesheet())
+        btn.setToolTip("Minimize")
+        btn.clicked.connect(self.panel_collapse_requested.emit)
+        lay.addWidget(btn)
+
         return w
 
     def _build_main_panel(self) -> QWidget:
         w = QWidget()
-        w.setStyleSheet("background: transparent;")
+        w.setStyleSheet(f"background: {C.BG}; border-bottom-left-radius: {RADIUS_L}px; border-bottom-right-radius: {RADIUS_L}px;")
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(12, 4, 12, 10)
-        lay.setSpacing(10)
+        lay.setContentsMargins(14, 0, 14, 14)
+        lay.setSpacing(8)
 
         self._log_progress_lbl = QLabel("")
         self._log_progress_lbl.setStyleSheet(
-            f"color: {C.LINK}; background: transparent; {ui_font(10)}"
+            f"color: {C.BLUE}; background: transparent; {ui_font(9)}"
         )
         self._log_progress_lbl.setVisible(False)
         lay.addWidget(self._log_progress_lbl)
@@ -655,69 +781,45 @@ class MainWindow(QMainWindow):
         self._camera_embed.setStyleSheet(embed_panel_stylesheet())
         self._camera_embed.hide()
         lay.addWidget(self._camera_embed, stretch=1)
-        self._log = ChatView()   # bubble chat (drop-in for LogWidget)
+        self._log = ChatView()
+        self._log.retry_last.connect(self._on_retry_last)
         lay.addWidget(self._log, stretch=1)
 
         self._cmd = CommandBar()
         self._cmd.file_selected.connect(self._on_file_selected)
         self._cmd.line_edit.returnPressed.connect(self._send)
+        self._cmd.line_edit.textChanged.connect(self._scroll_log_to_bottom)
         lay.addWidget(self._cmd)
 
-        self._mute_btn = QPushButton()
-        self._mute_btn.setFixedHeight(36)
-        self._mute_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._mute_btn.clicked.connect(self._toggle_mute)
-        self._style_mute_btn()
-        lay.addWidget(self._mute_btn)
-
         return w
+
+    def _scroll_log_to_bottom(self):
+        self._log.verticalScrollBar().setValue(self._log.verticalScrollBar().maximum())
+
+    def _on_reset_requested(self):
+        self._log.clear_view()
+        self._log.append_log("System: Conversation reset.")
+
+    def _on_retry_last(self):
+        last = getattr(self._log, "_last_user", "") or ""
+        if not last or not self.on_text_command:
+            return
+        import threading
+        threading.Thread(target=self.on_text_command, args=(last,), daemon=True).start()
+
 
     def _build_right_panel(self) -> QWidget:
         return self._build_main_panel()
 
-    def _build_footer(self) -> QWidget:
-        w = _FooterStrip()
-        self._footer_strip = w
-        w.setFixedHeight(34)
-        w.setStyleSheet("background: transparent;")
-        w.collapse_requested.connect(self.panel_collapse_requested.emit)
-        lay = QHBoxLayout(w)
-        lay.setContentsMargins(4, 4, 4, 4)
 
-        self._shrink_btn = QPushButton("⌄  Shrink to buddy")
-        self._shrink_btn.setFlat(True)
-        self._shrink_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._shrink_btn.setStyleSheet(
-            f"""
-            QPushButton {{
-                color: {C.TEXT_MED};
-                background: transparent;
-                border: none;
-                text-align: left;
-                padding: 2px 0;
-                {ui_font(10)}
-            }}
-            QPushButton:hover {{
-                color: #6fe3d6;
-            }}
-            """
-        )
-        self._shrink_btn.clicked.connect(self.panel_collapse_requested.emit)
-        lay.addWidget(self._shrink_btn, stretch=1)
-        hint = QLabel("F4 to mute")
-        hint.setStyleSheet(
-            f"color: {C.PRI_GHO}; background: transparent; {ui_font(9)}"
-        )
-        hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        lay.addWidget(hint)
-        return w
 
-    def _start_search_progress(self, eta_sec: int):
+    def _start_search_progress(self, eta_sec: int, label: str = ""):
         self._progress_eta = max(8, eta_sec)
+        self._progress_label = label or "Searching"
         self._progress_elapsed = 0.0
         self._log_progress_bar.setRange(0, 100)
         self._log_progress_bar.setValue(0)
-        self._log_progress_lbl.setText(f"Searching · ~{self._progress_eta}s")
+        self._log_progress_lbl.setText(f"{self._progress_label} · ~{self._progress_eta}s")
         self._log_progress_lbl.setVisible(True)
         self._log_progress_bar.setVisible(True)
         self._progress_tick.start(500)
@@ -727,7 +829,7 @@ class MainWindow(QMainWindow):
         pct = min(96, int(100 * self._progress_elapsed / self._progress_eta))
         left = max(0, int(self._progress_eta - self._progress_elapsed))
         self._log_progress_bar.setValue(pct)
-        self._log_progress_lbl.setText(f"Searching · ~{left}s left")
+        self._log_progress_lbl.setText(f"{getattr(self, '_progress_label', 'Searching')} · ~{left}s left")
 
     def _stop_search_progress(self):
         self._progress_tick.stop()
@@ -745,17 +847,6 @@ class MainWindow(QMainWindow):
 
     def _on_file_selected(self, path: str):
         self._current_file = path
-        p = Path(path)
-        size = _fmt_size(p.stat().st_size)
-        self._log.append_log(f"FILE: {p.name} ({size}) loaded")
-        if self.on_text_command:
-            msg = (
-                f"[FILE_UPLOADED] path={path} | name={p.name} | "
-                f"type={p.suffix.lstrip('.')} | size={size} | "
-                f"Briefly tell the user you can see the file '{p.name}' "
-                f"({size}) has been uploaded and ask what they'd like to do with it."
-            )
-            threading.Thread(target=self.on_text_command, args=(msg,), daemon=True).start()
 
     def _sync_mic_ui(self):
         if self._manual_mute:
@@ -778,16 +869,16 @@ class MainWindow(QMainWindow):
         self._sync_mic_ui()
         self._style_mute_btn()
         if self._manual_mute:
-            print("[ARIA] Microphone muted.")
+            print("[NEO] Microphone muted.")
         elif self._standby:
-            print("[ARIA] Standby — say 'Hey Aria' or clap twice.")
+            print("[NEO] Standby — say 'Hey Neo' or clap twice.")
         else:
-            print("[ARIA] Microphone active.")
+            print("[NEO] Microphone active.")
 
     def _style_mute_btn(self):
         if not hasattr(self, "_mute_btn"):
             return
-        font = ui_font(12, bold=True)
+        font = ui_font(10)
         radius = RADIUS_M
         if self._mic_live and not self._manual_mute and not self._standby:
             self._mute_btn.hide()
@@ -800,14 +891,13 @@ class MainWindow(QMainWindow):
                 QPushButton {{
                     border-radius: {radius}px;
                     {font}
-                    background: rgba(248, 113, 113, 0.12);
+                    background: rgba(248, 113, 113, 0.08);
                     color: {C.RED};
-                    border: 1px solid rgba(248, 113, 113, 0.35);
+                    border: 1px solid rgba(248, 113, 113, 0.20);
                 }}
                 """
             )
         elif self._standby:
-            # No standby button in the window — the menu bar + wake word cover this.
             self._mute_btn.hide()
             return
         else:
@@ -817,58 +907,53 @@ class MainWindow(QMainWindow):
                 QPushButton {{
                     border-radius: {radius}px;
                     {font}
-                    background: {C.SURFACE2};
-                    color: {C.TEXT_DIM};
-                    border: 1px solid #2a2a30;
+                    background: rgba(255, 255, 255, 0.04);
+                    color: {C.TEXT_MED};
+                    border: 1px solid rgba(255, 255, 255, 0.06);
                 }}
                 QPushButton:hover {{
-                    background: #2a2a30;
+                    background: rgba(255, 255, 255, 0.08);
                     color: {C.TEXT};
                 }}
                 """
             )
 
     def _set_status_ui(self, text: str, color: str):
-        if hasattr(self, "_status_lbl"):
-            self._status_lbl.setText(text)
-            self._status_lbl.setStyleSheet(
-                f"color: {color}; background: transparent; {ui_font(11)}"
-            )
-        if hasattr(self, "_status_dot"):
-            self._status_dot.setStyleSheet(
-                f"color: {color}; background: transparent; font-size: 10pt;"
-            )
+        pass  # status lives in siri bar only — header stays clean
 
     def _apply_state(self, state: str):
         self._ui_state = state
         status_map = {
-            "STANDBY": ("Standby", C.TEXT_MED),
-            "LISTENING": ("Listening", C.GREEN),
-            "SPEAKING": ("Speaking", C.LINK),
-            "THINKING": ("Thinking", C.ACC2),
-            "MUTED": ("Muted", C.RED),
-            "INITIALISING": ("Starting…", C.TEXT_MED),
+            "STANDBY": ("Standby — say Hey Neo", C.TEXT_MED),
+            "LISTENING": ("Listening…", C.BLUE_L),
+            "SPEAKING": ("Speaking…", C.BLUE),
+            "THINKING": ("Working on it…", C.PURPLE),
+            "MUTED": ("Microphone muted", C.RED),
+            "INITIALISING": ("Starting up…", C.TEXT_MED),
         }
         text, color = status_map.get(state, (state.title(), C.TEXT_DIM))
         if self._manual_mute:
-            text, color = "Muted", C.RED
+            text, color = "Microphone muted", C.RED
         elif self._standby and state == "STANDBY":
-            text, color = "Standby", C.TEXT_MED
+            text, color = "Standby — say Hey Neo", C.TEXT_MED
         self._set_status_ui(text, color)
         self._style_mute_btn()
 
     def begin_email_capture(self, holder: dict) -> None:
         """Arm the command input to capture the next line as an email address."""
         self._email_capture = holder
-        self._log.append_log(f"ARIA: {holder.get('prompt', 'Type the email address.')}")
+        self._log.append_log(f"NEO: {holder.get('prompt', 'Type the email address.')}")
         self._cmd.line_edit.setText(holder.get("prefill", ""))
         self._cmd.line_edit.setFocus()
         self._cmd.line_edit.selectAll()
 
     def _send(self):
-        txt = self._cmd.line_edit.text().strip()
-        if not txt:
+        txt = self._cmd.line_edit.toPlainText().strip()
+        file_path = self._cmd.current_file()
+        
+        if not txt and not file_path:
             return
+            
         self._cmd.line_edit.clear()
 
         # If we're waiting for a typed email address, consume this line for that
@@ -881,25 +966,43 @@ class MainWindow(QMainWindow):
             cap["event"].set()
             return
 
-        self._log.append_log(f"You: {txt}")
+        if file_path:
+            p = Path(file_path)
+            size = _fmt_size(p.stat().st_size)
+            short_name = p.name if len(p.name) < 15 else f"file{p.suffix}"
+            # Prepend file context
+            file_context = (
+                f"[FILE_UPLOADED] path={file_path} | name={short_name} | "
+                f"type={p.suffix.lstrip('.')} | size={size}\n"
+            )
+            if txt:
+                self._log.append_log(f"You: [Attached {p.name}] {txt}")
+                txt = file_context + f"User message: {txt}"
+            else:
+                self._log.append_log(f"You: [Attached {p.name}]")
+                txt = file_context + f"Briefly tell the user you can see the file '{p.name}' ({size}) has been uploaded and ask what they'd like to do with it."
+            self._cmd.clear_file()
+        else:
+            self._log.append_log(f"You: {txt}")
+
         if self.on_text_command:
             threading.Thread(target=self.on_text_command, args=(txt,), daemon=True).start()
 
-    def _on_aria_stream_end(self, body: str, formatted):
-        self._log.end_aria_stream(body, formatted if formatted else None)
+    def _on_neo_stream_end(self, body: str, formatted):
+        self._log.end_neo_stream(body, formatted if formatted else None)
 
     def _check_config(self) -> bool:
-        if not API_FILE.exists(): return False
         try:
-            d = json.loads(API_FILE.read_text(encoding="utf-8"))
-            return bool(d.get("gemini_api_key")) and bool(d.get("os_system"))
+            from config import get_api_key, get_os
+
+            return bool(get_api_key("gemini_api_key", required=False)) and bool(get_os())
         except Exception:
             return False
 
     def _show_setup(self):
         ov = SetupOverlay(self.centralWidget())
         cw = self.centralWidget()
-        ow, oh = min(400, cw.width() - 24), min(300, cw.height() - 24)
+        ow, oh = min(400, cw.width() - 24), min(450, cw.height() - 24)
         ov.setGeometry(
             (cw.width()  - ow) // 2,
             (cw.height() - oh) // 2,
@@ -910,18 +1013,18 @@ class MainWindow(QMainWindow):
         self._overlay = ov
 
     def _on_setup_done(self, key: str, os_name: str):
+        from config import set_api_key, set_env_var
+
+        set_api_key("gemini_api_key", key)
+        set_env_var("OS_SYSTEM", os_name)
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        API_FILE.write_text(
-            json.dumps({"gemini_api_key": key, "os_system": os_name}, indent=4),
-            encoding="utf-8",
-        )
         self._ready = True
         if self._overlay:
             self._overlay.hide()
             self._overlay = None
         self._sync_mic_ui()
         self._style_mute_btn()
-        print(f"[ARIA] Initialised. OS={os_name.upper()}.")
+        print(f"[NEO] Initialised. OS={os_name.upper()}.")
 
 class _RootShim:
     def __init__(self, app: QApplication):
@@ -943,15 +1046,23 @@ def _siri_overlay_enabled() -> bool:
 
 
 def _hide_dock_icon() -> None:
-    """macOS: become an accessory app — live in the menu bar with no Dock icon."""
-    if platform.system() != "Darwin":
-        return
-    try:
-        import AppKit
-        AppKit.NSApp.setActivationPolicy_(1)
-        print("[Tray] Dock icon hidden successfully via AppKit")
-    except Exception as e:  # pragma: no cover - best effort
-        print(f"[Tray] could not hide Dock icon: {e}")
+    """Hide the app from the macOS Dock and Windows Taskbar."""
+    if platform.system() == "Darwin":
+        try:
+            import AppKit
+            AppKit.NSApp.setActivationPolicy_(1)
+            print("[Tray] Dock icon hidden successfully via AppKit")
+        except Exception as e:  # pragma: no cover - best effort
+            print(f"[Tray] could not hide Dock icon: {e}")
+    elif platform.system() == "Windows":
+        try:
+            import ctypes
+            # Hide the console window on Windows if it exists
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)
+        except Exception as e:
+            print(f"[Tray] could not hide console window: {e}")
 
 
 class _UiDispatcher(QObject):
@@ -965,7 +1076,7 @@ class _UiDispatcher(QObject):
     request_email = Signal(object)  # holder; show main window + capture typed address
 
 
-class AriaUI:
+class NeoUI:
     def __init__(self, face_path: str, size=None):
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setStyle("Fusion")
@@ -1022,18 +1133,19 @@ class AriaUI:
     def _init_tray(self) -> None:
         """Add the macOS menu-bar status item (the robot)."""
         try:
-            from ui_tray import AriaTray
-            self._tray = AriaTray(
+            from ui_tray import NeoTray
+            self._tray = NeoTray(
                 on_toggle=self._tray_toggle,
                 on_show=self._tray_show,
                 on_quit=self._tray_quit,
             )
+            self._tray.show()
         except Exception as e:  # pragma: no cover - best effort
             print(f"[Tray] unavailable: {e}")
             self._tray = None
 
     def _tray_show(self) -> None:
-        """Pop ARIA out (menu 'Show ARIA')."""
+        """Pop NEO out (menu 'Show NEO')."""
         if self._siri and self._siri_mode:
             self._siri.req_cancel_hide.emit()
             self._siri.req_show_compact.emit()
@@ -1043,7 +1155,7 @@ class AriaUI:
             self._win.activateWindow()
 
     def _tray_toggle(self) -> None:
-        """Left click — pop ARIA out, or tuck it away if already showing."""
+        """Left click — pop NEO out, or tuck it away if already showing."""
         if self._siri and self._siri_mode:
             self._siri.req_toggle.emit()
         elif self._win.isVisible():
@@ -1104,10 +1216,10 @@ class AriaUI:
         """Thread-safe: post a status line to the conversation panel.
 
         Visual feedback that does not depend on TTS (free-tier voice quota can
-        run out), so the user always sees what ARIA is doing.
+        run out), so the user always sees what NEO is doing.
         """
         try:
-            self._win._log.append_log(text)  # append_log is signal-backed / thread-safe
+            self._win._log_sig.emit(text)
         except Exception:
             pass
 
@@ -1270,39 +1382,38 @@ class AriaUI:
             elif state == "STANDBY" and not self._siri.is_expanded():
                 self.siri_hide_now()
 
-    def stream_aria(self, body: str):
-        """Update the live ARIA line while she is speaking."""
+    def stream_neo(self, body: str):
+        """Update the live NEO line while she is speaking."""
         if not body or not body.strip():
             return
         self.stop_log_progress()
         t = body.strip()
-        self._win._aria_stream_sig.emit(t)
+        self._win._neo_stream_sig.emit(t)
         if self._siri:
             self._siri.req_stream.emit(t)
 
-    def finish_aria_stream(self, body: str):
+    def finish_neo_stream(self, body: str):
         """Finalize the live line with optional list formatting."""
         if not body or not body.strip():
             return
         self.stop_log_progress()
-        formatted = _format_list_for_log(body.strip())
-        self._win._aria_stream_end_sig.emit(body.strip(), formatted)
+        self._win._neo_stream_end_sig.emit(body.strip(), None)
         if self._siri:
             self._siri.req_stream_end.emit(body.strip(), None)
 
     def write_log(self, text: str):
-        """Activity log — only user and ARIA lines, shown immediately."""
+        """Activity log — only user and NEO lines, shown immediately."""
         tl = text.strip().lower()
-        if not (tl.startswith("you:") or tl.startswith("aria:")):
+        if not (tl.startswith("you:") or tl.startswith("neo:")):
             return
-        if tl.startswith("aria:"):
+        if tl.startswith("neo:"):
             self.stop_log_progress()
             body = text.split(":", 1)[1].strip()
-            if self._win._log._aria_stream_active:
-                self.finish_aria_stream(body)
+            if self._win._log._neo_stream_active:
+                self.finish_neo_stream(body)
                 return
-            text = "Aria: " + _format_list_for_log(body)
-        self._win._log.append_log_instant(text)
+            text = "Neo: " + body
+        self._win._log_sig.emit(text)
         if self._siri:
             self._siri.req_append_log.emit(text)
 
@@ -1315,7 +1426,7 @@ class AriaUI:
             self._siri.req_cancel_hide.emit()
 
     def write_activity(self, text: str):
-        """Status line on the compact bar."""
+        """Status on compact bar only — not chat blocks."""
         if not text or not text.strip():
             return
         t = text.strip()
@@ -1323,7 +1434,7 @@ class AriaUI:
             self._siri.req_set_activity.emit(t)
 
     def start_log_progress(self, eta_sec: int = 15, label: str = ""):
-        self._win._progress_start_sig.emit(eta_sec)
+        self._win._progress_start_sig.emit(eta_sec, label)
         if self._siri:
             self._siri.req_progress_start.emit(eta_sec, label or "Working…")
 
@@ -1344,14 +1455,35 @@ class AriaUI:
             self._siri = None
 
     def show_visuals(self, summary: str, query: str, on_done=None):
-        """Compact UI: skip image grid; finish callback immediately."""
+        """Open Google Images in the browser for visual/product searches."""
+        from actions.browser_native import is_visual_product_query, open_google_images
+
+        q = (query or "").strip()
+        if not q and summary:
+            q = summary.split("\n", 1)[0].strip()[:120]
+        if not q or not is_visual_product_query(f"{q} {summary[:400]}"):
+            if on_done:
+                try:
+                    on_done()
+                except Exception as e:
+                    print(f"[Visuals] on_done: {e}")
+            return
+
+        def run():
+            try:
+                open_google_images(q)
+            except Exception as e:
+                print(f"[Visuals] Failed to open images: {e}")
+            finally:
+                if on_done:
+                    try:
+                        on_done()
+                    except Exception as e:
+                        print(f"[Visuals] on_done: {e}")
+
+        threading.Thread(target=run, daemon=True, name="NEO-visuals").start()
         if self._siri:
             self._siri.req_slide_in.emit()
-        if on_done:
-            try:
-                on_done()
-            except Exception as e:
-                print(f"[VisualFeed] on_done: {e}")
 
     def wait_for_api_key(self):
         while not self._win._ready:

@@ -1,4 +1,4 @@
-"""Dependency-free smoke + unit tests for ARIA.
+"""Dependency-free smoke + unit tests for NEO.
 
 Run from the project root:
 
@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 
 # --------------------------------------------------------------------------- #
-# 1. Import smoke test — every action/hybrid module must import cleanly.       #
+# 1. Import smoke test â€” every action/hybrid module must import cleanly.       #
 # --------------------------------------------------------------------------- #
 
 def test_action_modules_import():
@@ -38,12 +38,12 @@ def test_action_modules_import():
 
 def test_core_packages_import():
     for mod in ("config", "hybrid.registry", "hybrid.router", "hybrid.types",
-                "actions.confirm_gate", "memory.memory_manager"):
+                "actions.confirm_gate", "core.memory_rag"):
         importlib.import_module(mod)
 
 
 # --------------------------------------------------------------------------- #
-# 2. Confirm-gate unit tests — the destructive-action authorization logic.     #
+# 2. Confirm-gate unit tests â€” the destructive-action authorization logic.     #
 # --------------------------------------------------------------------------- #
 
 def _fresh_gate():
@@ -99,7 +99,7 @@ def test_as_bool():
 
 
 # --------------------------------------------------------------------------- #
-# 3. Autonomous agent loop — control flow, verified with a fake session.       #
+# 3. Autonomous agent loop â€” control flow, verified with a fake session.       #
 # --------------------------------------------------------------------------- #
 
 def _fresh_registry():
@@ -194,65 +194,6 @@ def test_agent_loop_respects_step_budget():
     assert res.stopped_reason == "max_steps"
     assert len(res.steps) == 3
     assert res.answer == "summary after limit"
-
-
-# --------------------------------------------------------------------------- #
-# 4. Autonomous project builder — scoped tools, sandbox guard, confirm gate.   #
-# --------------------------------------------------------------------------- #
-
-def test_build_registry_is_scoped():
-    """The build loop sees exactly the curated build tools — and dev_run is NOT
-    exposed to the always-on global toolset."""
-    from hybrid.bootstrap import register_all_tools
-    from core.agent_loop import build_registry
-
-    global_reg = register_all_tools()
-    assert set(build_registry().names()) == {
-        "file_controller", "web_search", "code_helper", "dev_run",
-    }
-    assert global_reg.lookup("dev_run") is None  # command runner stays scoped
-
-
-def test_dev_run_refuses_outside_sandbox():
-    from actions.dev_run import dev_run
-    assert "refused" in dev_run({"command": "echo hi", "project_dir": "/etc"}).lower()
-
-
-def test_project_builder_needs_description():
-    from actions.project_builder import project_builder
-
-    assert "describe" in project_builder({"action": "start", "description": ""}).lower()
-
-
-def test_project_builder_start_builds_immediately():
-    """action=start drives run_build (the autonomous loop) right away — no
-    confirmation gate — and returns its answer. Verified with a fake loop."""
-    import tempfile
-    from pathlib import Path
-
-    import core.agent_loop as al
-    from actions import project_builder as pb
-    from core.agent_loop import AgentResult
-
-    seen: dict = {}
-
-    def fake_run_build(goal, ctx=None, *, on_step=None, on_plan=None, max_steps=40):
-        seen["goal"] = goal
-        return AgentResult(
-            answer="Built the snake game. Run: python main.py",
-            steps=[], stopped_reason="done",
-        )
-
-    orig_run_build, orig_projects = al.run_build, pb.PROJECTS_DIR
-    try:
-        al.run_build = fake_run_build
-        pb.PROJECTS_DIR = Path(tempfile.mkdtemp())
-        out = pb.project_builder({"action": "start", "description": "snake game in python"})
-    finally:
-        al.run_build, pb.PROJECTS_DIR = orig_run_build, orig_projects
-
-    assert "snake" in seen.get("goal", "").lower()
-    assert "Built the snake game" in out
 
 
 # --------------------------------------------------------------------------- #

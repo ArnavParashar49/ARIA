@@ -61,7 +61,7 @@ def computer_control(
 ) -> str:
     """
     Dispatch table for CLI computer control actions.
-    Actions: random_data, user_data, focus_window, wait
+    Actions: random_data, user_data, focus_window, wait, run_command
     """
     params = parameters or {}
     action = params.get("action", "").lower().strip()
@@ -71,6 +71,21 @@ def computer_control(
 
     if player:
         player.write_log(f"[Computer] {action}")
+
+    if action == "run_command":
+        cmd = params.get("command", "")
+        if not cmd:
+            return "No command provided to run."
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+            out = r.stdout.strip()
+            err = r.stderr.strip()
+            if r.returncode == 0:
+                return f"Command executed successfully.\nOutput:\n{out}" if out else "Command executed successfully with no output."
+            else:
+                return f"Command failed with exit code {r.returncode}.\nOutput:\n{out}\nError:\n{err}"
+        except Exception as e:
+            return f"Failed to execute command: {e}"
 
     if action == "wait":
         secs = min(float(params.get("seconds", 1.0)), 30.0)
